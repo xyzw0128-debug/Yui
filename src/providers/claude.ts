@@ -23,6 +23,8 @@ registerProviderContainerConfig('claude', () => {
   if (dotenv.ANTHROPIC_BASE_URL) {
     env.ANTHROPIC_BASE_URL = dotenv.ANTHROPIC_BASE_URL;
     env.ANTHROPIC_AUTH_TOKEN = 'placeholder';
+    env.NO_PROXY = '172.17.0.1,localhost,127.0.0.1';
+    env.no_proxy = '172.17.0.1,localhost,127.0.0.1';
   }
   return { env };
 });
