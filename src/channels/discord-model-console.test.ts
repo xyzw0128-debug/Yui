@@ -36,7 +36,7 @@ describe('discord-model-console', () => {
   });
 
   describe('buildModelConsolePayload', () => {
-    it('builds a green payload when flash-lite is active and healthy', () => {
+    it('builds a green payload when 3.5 flash-lite is active and healthy', () => {
       const status: ModelStatus = {
         activeModel: 'gemini-3.5-flash-lite',
         keyCount: 14,
@@ -51,27 +51,35 @@ describe('discord-model-console', () => {
       expect(embed.color).toBe(0x2ecc71); // Green
       expect(embed.title).toContain('AI 모델 제어 콘솔');
 
-      const buttons = (payload.components[0] as { components: Array<Record<string, unknown>> }).components;
-      expect(buttons).toHaveLength(4);
+      expect(payload.components).toHaveLength(3); // 3 ActionRows
 
-      // Button 1 (flash-lite) should be marked active with style 3 (Success)
-      expect(buttons[0].custom_id).toBe('model:flash-lite');
-      expect(buttons[0].style).toBe(3);
-      expect(buttons[0].label).toContain('[활성]');
+      // Row 1: 3.1 & 3.5 Flash-Lite
+      const row1Buttons = (payload.components[0] as { components: Array<Record<string, unknown>> }).components;
+      expect(row1Buttons).toHaveLength(2);
+      expect(row1Buttons[0].custom_id).toBe('model:3.1-flash-lite');
+      expect(row1Buttons[0].style).toBe(2);
+      expect(row1Buttons[1].custom_id).toBe('model:3.5-flash-lite');
+      expect(row1Buttons[1].style).toBe(3); // Active
+      expect(row1Buttons[1].label).toContain('[활성]');
 
-      // Button 2 (flash) should be style 2 (Secondary)
-      expect(buttons[1].custom_id).toBe('model:flash');
-      expect(buttons[1].style).toBe(2);
+      // Row 2: 3.5, 3.6, 3.7 Flash
+      const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
+      expect(row2Buttons).toHaveLength(3);
+      expect(row2Buttons[0].custom_id).toBe('model:3.5-flash');
+      expect(row2Buttons[1].custom_id).toBe('model:3.6-flash');
+      expect(row2Buttons[2].custom_id).toBe('model:3.7-flash');
 
-      // Button 3 (status) and 4 (restart)
-      expect(buttons[2].custom_id).toBe('model:status');
-      expect(buttons[3].custom_id).toBe('model:restart');
-      expect(buttons[3].style).toBe(4); // Danger
+      // Row 3: Utility (status, restart)
+      const row3Buttons = (payload.components[2] as { components: Array<Record<string, unknown>> }).components;
+      expect(row3Buttons).toHaveLength(2);
+      expect(row3Buttons[0].custom_id).toBe('model:status');
+      expect(row3Buttons[1].custom_id).toBe('model:restart');
+      expect(row3Buttons[1].style).toBe(4); // Danger
     });
 
-    it('builds an orange payload when flash is active', () => {
+    it('builds a purple payload when 3.7 flash is active', () => {
       const status: ModelStatus = {
-        activeModel: 'gemini-3.5-flash',
+        activeModel: 'gemini-3.7-flash',
         keyCount: 14,
         dockerStatus: 'running',
         httpOk: true,
@@ -79,14 +87,11 @@ describe('discord-model-console', () => {
       };
 
       const payload = buildModelConsolePayload(status);
-      expect(payload.embeds[0].color).toBe(0xf39c12); // Orange
+      expect(payload.embeds[0].color).toBe(0x9b59b6); // Purple for thinking
 
-      const buttons = (payload.components[0] as { components: Array<Record<string, unknown>> }).components;
-      // Button 1 (flash-lite) should be style 2
-      expect(buttons[0].style).toBe(2);
-      // Button 2 (flash) should be style 3
-      expect(buttons[1].style).toBe(3);
-      expect(buttons[1].label).toContain('[활성]');
+      const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
+      expect(row2Buttons[2].style).toBe(3); // Active
+      expect(row2Buttons[2].label).toContain('[활성]');
     });
 
     it('builds a red payload when httpOk is false', () => {
