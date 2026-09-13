@@ -387,7 +387,8 @@ function resolveSelectedOption(
   eventValue: string | undefined,
   tail: string | undefined,
 ): string {
-  const candidate = eventValue ?? tail ?? '';
+  const raw = eventValue ?? tail ?? '';
+  const candidate = raw.split('\n')[0].trim();
   if (render && /^\d+$/.test(candidate)) {
     const idx = Number(candidate);
     if (render.options[idx]) return render.options[idx].value;
@@ -678,7 +679,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       // Handle button clicks (ask_user_question)
       chat.onAction(async (event) => {
         if (!event.actionId.startsWith('ncq:')) return;
-        const parts = event.actionId.split(':');
+        const cleanActionId = event.actionId.split('\n')[0];
+        const parts = cleanActionId.split(':');
         if (parts.length < 3) return;
         const questionId = parts[1];
         const tail = parts.slice(2).join(':');
@@ -1045,7 +1047,7 @@ function startLocalWebhookServer(
   });
 }
 
-async function handleForwardedEvent(
+export async function handleForwardedEvent(
   body: string,
   adapter: GatewayAdapter,
   setupConfig: ChannelSetup,
@@ -1075,10 +1077,11 @@ async function handleForwardedEvent(
       let questionId: string | undefined;
       let tail: string | undefined;
       if (customId?.startsWith('ncq:')) {
-        const colonIdx = customId.indexOf(':', 4); // after "ncq:"
+        const cleanCustomId = customId.split('\n')[0];
+        const colonIdx = cleanCustomId.indexOf(':', 4); // after "ncq:"
         if (colonIdx !== -1) {
-          questionId = customId.slice(4, colonIdx);
-          tail = customId.slice(colonIdx + 1);
+          questionId = cleanCustomId.slice(4, colonIdx);
+          tail = cleanCustomId.slice(colonIdx + 1);
         }
       }
 

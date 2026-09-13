@@ -23,7 +23,7 @@ vi.mock('../webhook-server.js', () => ({
 import { closeDb, initTestDb, runMigrations } from '../db/index.js';
 import { createPendingApproval } from '../db/sessions.js';
 import type { ChannelSetup } from './adapter.js';
-import { createChatSdkBridge } from './chat-sdk-bridge.js';
+import { createChatSdkBridge, handleForwardedEvent } from './chat-sdk-bridge.js';
 import { registerQuestionRenderResolver } from './question-render-registry.js';
 
 interface CapturedEdit {
@@ -172,5 +172,71 @@ describe('chat-sdk-bridge approval-card terminal state', () => {
     expect(message.markdown).toContain('Custom approval');
     expect(message.markdown).toContain('Approved safely by reviewer');
     expect(actions).toEqual(['module-compact-question:approve-real-value:U4']);
+  });
+
+  it('strips newline delimiter from actionId and value in chat.onAction', async () => {
+    registerQuestionRenderResolver((questionId) => {
+      if (questionId !== 'discord-newline-question') return undefined;
+      return {
+        title: 'Restart approval',
+        options: [{ label: 'Approve', selectedLabel: 'Approved', value: 'approve' }],
+      };
+    });
+
+    const { edits, actions } = await fireAction(
+      { userId: 'U5', userName: 'admin' },
+      '0\n0',
+      'ncq:discord-newline-question:0\n0',
+    );
+
+    const message = edits[0].message as { markdown: string };
+    expect(message.markdown).toContain('Restart approval');
+    expect(message.markdown).toContain('Approved by admin');
+    expect(actions).toEqual(['discord-newline-question:approve:U5']);
+  });
+
+  it('correctly resolves Discord gateway button interaction with newline delimiter in custom_id', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
+    const dispatchedActions: string[] = [];
+
+    const setupConfig: ChannelSetup = {
+      onInbound: async () => {},
+      onInboundEvent: async () => {},
+      onMetadata: () => {},
+      onAction: (questionId: string, selectedOption: string, userId: string) => {
+        dispatchedActions.push(`${questionId}:${selectedOption}:${userId}`);
+      },
+    } as unknown as ChannelSetup;
+
+    const gatewayPayload = JSON.stringify({
+      type: 'GATEWAY_INTERACTION_CREATE',
+      data: {
+        type: 3,
+        id: 'interaction-123',
+        token: 'token-456',
+        data: {
+          custom_id: 'ncq:q-1:0\n0',
+        },
+        user: {
+          id: 'user-lael',
+          username: 'lael',
+        },
+        message: {
+          embeds: [{ title: 'Approval needed', description: 'Keep these full request details.' }],
+        },
+      },
+    });
+
+    await handleForwardedEvent(gatewayPayload, {} as never, setupConfig);
+
+    expect(dispatchedActions).toEqual(['q-1:approve:user-lael']);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://discord.com/api/v10/interactions/interaction-123/token-456/callback',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('✅ Approved by lael'),
+      }),
+    );
+    fetchSpy.mockRestore();
   });
 });

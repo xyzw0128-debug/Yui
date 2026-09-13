@@ -914,6 +914,28 @@ describe('--help interception', () => {
     expect(approvalState.observedContexts).toHaveLength(0); // handler never ran
   });
 
+  it('never mints an approval card for positional help on an approval-gated command', async () => {
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'group' });
+    mockGetSession.mockReturnValue({ id: 's1', agent_group_id: 'g1', messaging_group_id: 'mg1' });
+
+    const resp = await dispatch({ id: '1', command: 'approval-context-command-help', args: {} }, agentCtx());
+
+    expect(resp.ok).toBe(true);
+    expect(approvalState.requestApproval).not.toHaveBeenCalled();
+    expect(approvalState.observedContexts).toHaveLength(0);
+  });
+
+  it('never mints an approval card when --id is help on an approval-gated command', async () => {
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'group' });
+    mockGetSession.mockReturnValue({ id: 's1', agent_group_id: 'g1', messaging_group_id: 'mg1' });
+
+    const resp = await dispatch({ id: '1', command: 'approval-context-command', args: { id: 'help' } }, agentCtx());
+
+    expect(resp.ok).toBe(true);
+    expect(approvalState.requestApproval).not.toHaveBeenCalled();
+    expect(approvalState.observedContexts).toHaveLength(0);
+  });
+
   it('renders deep verb help when the resource def is available', async () => {
     mockGetResource.mockImplementation((plural: string) =>
       plural === 'groups'

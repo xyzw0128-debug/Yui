@@ -60,7 +60,11 @@ export async function dispatch(
       if (fallback) {
         const tail = req.command.slice(shortened.length + 1); // full remainder = id, dashes intact
         cmd = fallback;
-        req = { ...req, command: shortened, args: { ...req.args, id: req.args.id ?? tail } };
+        if (tail === 'help') {
+          req = { ...req, command: shortened, args: { ...req.args, help: true } };
+        } else {
+          req = { ...req, command: shortened, args: { ...req.args, id: req.args.id ?? tail } };
+        }
         break;
       }
     }
@@ -68,6 +72,11 @@ export async function dispatch(
 
   if (!cmd) {
     return err(req.id, 'unknown-command', unknownCommandMessage(req.command));
+  }
+
+  if (req.args.id === 'help') {
+    const { id: _, ...rest } = req.args;
+    req = { ...req, args: { ...rest, help: true } };
   }
 
   // Group-scope mechanics for agent callers (visibility, not policy — the
@@ -129,7 +138,7 @@ export async function dispatch(
   // executing. Placed after the guard's deny (a group-scoped agent can't probe
   // forbidden resources) and BEFORE hold execution — asking for help on an
   // approval-gated verb must never mint an approval card.
-  if (req.args.help === true) {
+  if (req.args.help === true || req.args.id === 'help') {
     // Carry the help text in `human` too, so both clients print it verbatim
     // as clean multi-line text instead of a JSON-stringified blob.
     const helpText = commandHelp(cmd.name, cmd.resource, cmd.description);
