@@ -490,11 +490,13 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       const enriched = [];
       for (const att of message.attachments) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rawAtt = att as Record<string, any>;
         const entry: Record<string, any> = {
           type: att.type,
           name: att.name,
           mimeType: att.mimeType,
           size: att.size,
+          url: rawAtt.url,
           width: (att as unknown as Record<string, unknown>).width,
           height: (att as unknown as Record<string, unknown>).height,
         };
@@ -504,6 +506,19 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
             entry.data = buffer.toString('base64');
           } catch (err) {
             log.warn('Failed to download attachment', { type: att.type, err });
+          }
+        } else if (rawAtt.url && typeof rawAtt.url === 'string') {
+          try {
+            const res = await fetch(rawAtt.url);
+            if (res.ok) {
+              const ab = await res.arrayBuffer();
+              entry.data = Buffer.from(ab).toString('base64');
+              log.info('Downloaded attachment via URL', { name: att.name, size: ab.byteLength });
+            } else {
+              log.warn('Failed to download attachment via URL', { url: rawAtt.url, status: res.status });
+            }
+          } catch (err) {
+            log.warn('Error fetching attachment via URL', { url: rawAtt.url, err });
           }
         }
         enriched.push(entry);
