@@ -639,23 +639,16 @@ export async function handleRateLimitDetected(
 
     // If current model is not in the Flash failover chain (e.g. Lite or unknown)
     if (!(currentModel in FLASH_FAILOVER_CHAIN)) {
-      log.warn('429 watchdog: Active model not in flash failover chain', { currentModel });
-      if (currentModel.includes('flash-lite')) {
-        await sendDiscordNotification({
-          title: '⚠️ [할당량 초과] Flash-Lite 쿼터 소진 감지',
-          description: `현재 활성 모델(**${currentModel}**)에서 429(Rate Limit)가 감지되었습니다.\n모든 키의 일일 할당량이 소진되었을 수 있습니다.`,
-          color: 0xe67e22,
-          footer: { text: 'NanoClaw Watchdog • ⏰ 초기화: 매일 16:00 KST' },
-          timestamp: new Date().toISOString(),
-        });
-      }
+      log.info('429 watchdog: Active model not in flash failover chain; leaving Claude Code to handle natively', {
+        currentModel,
+      });
       return { action: 'ignored', from: currentModel };
     }
 
     const nextModel = FLASH_FAILOVER_CHAIN[currentModel];
 
     if (nextModel) {
-      // Step down to next Flash model
+      // Step down to next Flash model (3.7 -> 3.6 or 3.6 -> 3.5)
       log.info('429 watchdog: Auto-switching flash model', { from: currentModel, to: nextModel });
       await switchProxyModel(nextModel);
 
@@ -678,32 +671,12 @@ export async function handleRateLimitDetected(
       return { action: 'switch', from: currentModel, to: nextModel };
     } else {
       // nextModel === null: 3.5 Flash is exhausted!
-      // STRICT POLICY: STOP & TERMINATE TASK. NEVER SWITCH TO LITE!
-      log.warn('429 watchdog: All flash models exhausted! Stopping task to protect code integrity', {
-        currentModel,
-      });
-
-      await sendDiscordNotification({
-        title: '🚨 [작업 중단] 고성능 Flash 모델 일일 쿼터 전면 소진',
-        description:
-          `고성능 Flash 모델군(3.7, 3.6, 3.5 Flash)의 일일 쿼터가 모두 소진되었습니다 (429 Rate Limit).\n\n` +
-          `🛡️ **코드 오염 방지 정책 가동 (Lite 자동 전환 금지)**\n` +
-          `Flash-Lite 모델은 추론 능력 제약으로 인해 복잡한 코드 작성이나 리팩토링 시 코드가 꼬이거나 손상될 위험이 있습니다.\n` +
-          `따라서 **Lite 모델로 자동 전환하지 않고 안전하게 작업을 중단**했습니다.\n\n` +
-          `⏰ **한도 초기화 시간**: 매일 16:00 KST (PST 00:00)\n` +
-          `💡 일상 대화나 단순 질의를 위해 Lite 모델을 사용하시려면 Discord에서 \`/model\` 콘솔을 열어 수동으로 전환하실 수 있습니다.`,
-        color: 0xe74c3c, // Red
-        fields: [
-          { name: '소진된 모델', value: 'Gemini 3.7 Flash, 3.6 Flash, 3.5 Flash', inline: false },
-          {
-            name: '조치 사항',
-            value: '현재 진행 중이던 Claude Code 작업이 안전하게 중단(Pause)되었습니다.',
-            inline: false,
-          },
-        ],
-        footer: { text: 'NanoClaw Safety Guard • 매일 16:00 KST 리셋' },
-        timestamp: new Date().toISOString(),
-      });
+      // Do NOT switch to Lite. Do NOT send task stop alerts.
+      // Leave Claude Code 100% alone to follow its native retry and exit behavior.
+      log.info(
+        '429 watchdog: All flash models exhausted. Leaving Claude Code to handle retries/errors natively without interference.',
+        { currentModel },
+      );
 
       return { action: 'stop', from: currentModel, to: null };
     }
