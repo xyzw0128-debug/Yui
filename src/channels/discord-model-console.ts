@@ -86,9 +86,7 @@ export async function getModelStatus(actionMessage?: string): Promise<ModelStatu
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const config = fs.readFileSync(CONFIG_PATH, 'utf8');
-      const match =
-        config.match(/alias:\s*"claude-3-7-sonnet-20250219"[\s\S]*?name:\s*"([^"]+)"/) ||
-        config.match(/name:\s*"([^"]+)"[\s\S]*?alias:\s*"claude-3-7-sonnet-20250219"/);
+      const match = config.match(/- name:\s*"([^"]+)"\s*\n\s*alias:\s*"claude-3-7-sonnet-20250219"/);
       if (match) {
         activeModel = match[1];
       }
