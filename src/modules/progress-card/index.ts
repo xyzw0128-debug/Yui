@@ -180,6 +180,8 @@ export function startProgressCard(
             card.gate.finishEdit(Date.now(), false);
           });
       }
+    } else if (delay !== null) {
+      card.gate.releaseSchedule();
     }
   }, 500);
 

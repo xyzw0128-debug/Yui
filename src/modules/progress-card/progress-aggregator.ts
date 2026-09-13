@@ -71,6 +71,8 @@ export class ProgressAggregator {
             inputSummary = cleanBashCommand(inp.command);
           } else if (name.includes('add_reaction')) {
             inputSummary = `:${inp.emoji || 'blue_heart'}:`;
+          } else if (name.includes('ask_user_question')) {
+            inputSummary = String(inp.title || inp.question || '선택지 제시');
           } else if (typeof inp.prompt === 'string') {
             inputSummary = inp.prompt;
           } else if (typeof inp.query === 'string') {
@@ -89,14 +91,48 @@ export class ProgressAggregator {
             this.phase = 'tool';
             this.dirty = true;
           }
+        } else if (c.type === 'thinking' && typeof c.thinking === 'string') {
+          const raw = c.thinking.trim();
+          const cleanLines = raw
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(
+              (l) =>
+                l.length > 0 &&
+                !l.startsWith('Sensitive-sounding') &&
+                !l.startsWith('<internal>') &&
+                !l.startsWith('In CLAUDE.md'),
+            );
+          if (cleanLines.length > 0) {
+            this.thinking = cleanLines[0].replace(/<[^>]+>/g, '').trim();
+            this.phase = 'thinking';
+            this.dirty = true;
+          }
         } else if (c.type === 'text' && typeof c.text === 'string') {
           const text = c.text.trim();
           if (!text) continue;
           if (text.includes('<internal>')) {
-            this.thinking = text
-              .replace(/<\/?internal>/g, '')
-              .trim()
-              .split('\n')[0];
+            const internalMatch = text.match(/<internal>([\s\S]*?)<\/internal>/) || text.match(/<internal>([\s\S]*)/);
+            const inside = internalMatch ? internalMatch[1].trim() : text.replace(/<\/?internal>/g, '').trim();
+            const cleanLines = inside
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(
+                (l) =>
+                  l.length > 0 &&
+                  !l.startsWith('Sensitive-sounding') &&
+                  !l.startsWith('In CLAUDE.md') &&
+                  !l.startsWith('Wait, the system prompt'),
+              );
+            if (cleanLines.length > 0) {
+              this.thinking = cleanLines[0].replace(/<[^>]+>/g, '').trim();
+            } else {
+              const fallback = inside
+                .split('\n')
+                .map((l) => l.trim())
+                .filter((l) => l.length > 0);
+              this.thinking = (fallback[0] || '생각을 정리하고 있어요...').replace(/<[^>]+>/g, '').trim();
+            }
             this.phase = 'thinking';
             this.dirty = true;
           } else if (text.includes('<message')) {
