@@ -39,6 +39,8 @@ jobs:
         run: pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit
 
       - name: Host tests
+        env:
+          NODE_OPTIONS: "--no-deprecation"
         run: pnpm exec vitest run
 
       - name: Container tests
