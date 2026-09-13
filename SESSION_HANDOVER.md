@@ -9,7 +9,7 @@
 - **최신 커밋**: `8b71c96c` (`feat(discord): support multi-way flash failover rotation among 3.5, 3.6, and 3.7`)
 - **시스템 데몬**: `nanoclaw-v2-09435e69.service` (현재 active running)
 - **프록시 API**: Docker `cliproxyapi` (`http://172.17.0.1:8317`, 설정: `/home/lael/cliproxyapi/config.yaml`)
-- **API 키 풀**: Google AI Studio 키 14개 가동 중 (Round-Robin)
+- **API 키 풀**: Google AI Studio 키 7개 정상 가동 중 (Round-Robin, 정지된 7개 키 정리 완료)
 - **소유자 디스코드 ID**: `631432379889745930` (Lael)
 - **이전 대화 링크**: conversation://703c673e-2a00-4795-be81-0b1424012ee6
 
