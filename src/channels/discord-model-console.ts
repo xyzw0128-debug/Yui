@@ -9,7 +9,7 @@ const execAsync = promisify(exec);
 export function getCliproxyConfigPath(): string {
   if (process.env.CLIPROXY_CONFIG_PATH) return process.env.CLIPROXY_CONFIG_PATH;
   if (process.env.HOME) return path.join(process.env.HOME, 'cliproxyapi/config.yaml');
-  return '/home/lael/cliproxyapi/config.yaml';
+  return path.resolve('cliproxyapi/config.yaml');
 }
 
 export const CONFIG_PATH = getCliproxyConfigPath();
