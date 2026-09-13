@@ -27,6 +27,11 @@ import { normalizeOptions, type NormalizedOption } from './ask-question.js';
 import type { ChannelAdapter, ChannelDefaults, ChannelSetup, InboundMessage } from './adapter.js';
 import { INSTANCE_KEY_RE } from './channel-registry.js';
 import { resolveQuestionRender } from './question-render-registry.js';
+import {
+  handleModelSlashCommand,
+  handleModelButtonInteraction,
+  handleModelTextMessage,
+} from './discord-model-console.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
 interface GatewayAdapter extends Adapter {
@@ -1099,12 +1104,42 @@ export async function handleForwardedEvent(
     return;
   }
 
-  // Handle interaction events (button clicks) — not handled by adapter's handleForwardedGatewayEvent
+  // Handle interaction events (button clicks & slash commands) — not handled by adapter's handleForwardedGatewayEvent
   if (event.type === 'GATEWAY_INTERACTION_CREATE' && event.data) {
     const interaction = event.data;
+
+    // type 2 = Slash Command (Application Command)
+    if (interaction.type === 2) {
+      const data = interaction.data as Record<string, unknown>;
+      if (data?.name === 'model') {
+        const user =
+          ((interaction.member as Record<string, unknown>)?.user as Record<string, string> | undefined) ??
+          (interaction.user as Record<string, string> | undefined);
+        const requesterName = user?.global_name || user?.username;
+        try {
+          await handleModelSlashCommand(interaction, requesterName);
+        } catch (err) {
+          log.error('Failed to handle /model slash command', { err });
+        }
+        return;
+      }
+    }
+
     // type 3 = MessageComponent (button/select)
     if (interaction.type === 3) {
       const customId = (interaction.data as Record<string, unknown>)?.custom_id as string;
+
+      // Model Console interactive buttons
+      if (customId?.startsWith('model:')) {
+        const appId = (interaction.application_id as string) || process.env.DISCORD_APPLICATION_ID || '';
+        try {
+          await handleModelButtonInteraction(interaction, appId);
+        } catch (err) {
+          log.error('Failed to handle model console button click', { customId, err });
+        }
+        return;
+      }
+
       // In guilds the clicker is at interaction.member.user; in DMs it's interaction.user directly.
       const user =
         ((interaction.member as Record<string, unknown>)?.user as Record<string, string> | undefined) ??
@@ -1164,6 +1199,30 @@ export async function handleForwardedEvent(
         setupConfig.onAction(questionId, selectedOption, user?.id || '');
       }
       return;
+    }
+  }
+
+  // Handle plain text commands (!model, !모델)
+  if (event.type === 'GATEWAY_MESSAGE_CREATE' && event.data) {
+    const messageData = event.data;
+    const author = messageData.author as Record<string, unknown> | undefined;
+    if (!author?.bot) {
+      const rawContent = ((messageData.content as string) || '').trim();
+      const content = rawContent.toLowerCase();
+      const stripped = content.replace(/<@!?[0-9]+>/g, '').trim();
+      if (content === '!model' || content === '!모델' || stripped === '!model' || stripped === '!모델') {
+        const token = botToken || process.env.DISCORD_BOT_TOKEN;
+        if (token && messageData.channel_id) {
+          const authorRecord = author as Record<string, string> | undefined;
+          const requesterName = authorRecord?.global_name || authorRecord?.username;
+          try {
+            await handleModelTextMessage(messageData.channel_id as string, token, requesterName);
+          } catch (err) {
+            log.error('Failed to handle !model text command', { err });
+          }
+          return; // Early return to avoid forwarding to LLM agent
+        }
+      }
     }
   }
 
