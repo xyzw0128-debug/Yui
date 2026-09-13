@@ -4,6 +4,9 @@ import {
   buildModelConsolePayload,
   type ModelStatus,
   FLASH_FAILOVER_CHAIN,
+  FLASH_PERFORMANCE_MODELS,
+  getNextFlashModel,
+  clearExhaustedFlashModels,
   GIN_429_REGEX,
   SUPPORTED_MODELS,
   formatModelQuota,
@@ -137,22 +140,30 @@ describe('discord-model-console', () => {
     });
   });
 
-  describe('FLASH_FAILOVER_CHAIN (Zero-Degradation Policy)', () => {
-    it('cascades from 3.7-flash to 3.6-flash', () => {
-      expect(FLASH_FAILOVER_CHAIN['gemini-3.7-flash']).toBe('gemini-3.6-flash');
+  describe('FLASH_PERFORMANCE_MODELS & getNextFlashModel (Multi-way Flash Rotation)', () => {
+    beforeEach(() => {
+      clearExhaustedFlashModels();
     });
 
-    it('cascades from 3.6-flash to 3.5-flash', () => {
-      expect(FLASH_FAILOVER_CHAIN['gemini-3.6-flash']).toBe('gemini-3.5-flash');
+    it('contains only 3.7, 3.6, and 3.5 Flash models', () => {
+      expect(FLASH_PERFORMANCE_MODELS).toEqual(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
     });
 
-    it('STRICT: halts at 3.5-flash and NEVER cascades to Lite models', () => {
-      expect(FLASH_FAILOVER_CHAIN['gemini-3.5-flash']).toBeNull();
+    it('cascades from 3.7-flash to 3.6-flash then 3.5-flash then stops', () => {
+      expect(getNextFlashModel('gemini-3.7-flash')).toBe('gemini-3.6-flash');
+      expect(getNextFlashModel('gemini-3.6-flash')).toBe('gemini-3.5-flash');
+      expect(getNextFlashModel('gemini-3.5-flash')).toBeNull();
     });
 
-    it('does not include Lite models in failover chain to protect code integrity', () => {
-      expect(FLASH_FAILOVER_CHAIN['gemini-3.5-flash-lite']).toBeUndefined();
-      expect(FLASH_FAILOVER_CHAIN['gemini-3.1-flash-lite']).toBeUndefined();
+    it('cascades from 3.5-flash to 3.6-flash then 3.7-flash then stops', () => {
+      expect(getNextFlashModel('gemini-3.5-flash')).toBe('gemini-3.6-flash');
+      expect(getNextFlashModel('gemini-3.6-flash')).toBe('gemini-3.7-flash');
+      expect(getNextFlashModel('gemini-3.7-flash')).toBeNull();
+    });
+
+    it('STRICT: never rotates from Lite models (3.5-flash-lite, 3.1-flash-lite)', () => {
+      expect(getNextFlashModel('gemini-3.5-flash-lite')).toBeNull();
+      expect(getNextFlashModel('gemini-3.1-flash-lite')).toBeNull();
     });
   });
 
@@ -208,18 +219,33 @@ describe('discord-model-console', () => {
     });
   });
 
-  describe('handleRateLimitDetected (Safety Stop Behavior)', () => {
-    it('strictly triggers STOP when 3.5-flash hits 429 without downgrading to Lite', async () => {
-      const result = await handleRateLimitDetected('gemini-3.5-flash', true);
-      expect(result.action).toBe('stop');
-      expect(result.from).toBe('gemini-3.5-flash');
-      expect(result.to).toBeNull();
+  describe('handleRateLimitDetected (Safety & Lite Isolation)', () => {
+    beforeEach(() => {
+      clearExhaustedFlashModels();
     });
 
-    it('ignores and does not switch if current model is already a Lite model', async () => {
-      const result = await handleRateLimitDetected('gemini-3.5-flash-lite', true);
-      expect(result.action).toBe('ignored');
-      expect(result.from).toBe('gemini-3.5-flash-lite');
+    it('rotates from 3.5-flash to other Flash models and stops when all are exhausted', async () => {
+      const res1 = await handleRateLimitDetected('gemini-3.5-flash', true);
+      expect(res1.action).toBe('switch');
+      expect(res1.to).toBe('gemini-3.6-flash');
+
+      const res2 = await handleRateLimitDetected('gemini-3.6-flash', true);
+      expect(res2.action).toBe('switch');
+      expect(res2.to).toBe('gemini-3.7-flash');
+
+      const res3 = await handleRateLimitDetected('gemini-3.7-flash', true);
+      expect(res3.action).toBe('stop');
+      expect(res3.to).toBeNull();
+    });
+
+    it('ignores and does not switch if current model is a Lite model (3.5 or 3.1 Lite)', async () => {
+      const result35 = await handleRateLimitDetected('gemini-3.5-flash-lite', true);
+      expect(result35.action).toBe('ignored');
+      expect(result35.from).toBe('gemini-3.5-flash-lite');
+
+      const result31 = await handleRateLimitDetected('gemini-3.1-flash-lite', true);
+      expect(result31.action).toBe('ignored');
+      expect(result31.from).toBe('gemini-3.1-flash-lite');
     });
   });
 

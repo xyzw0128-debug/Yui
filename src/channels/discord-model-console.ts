@@ -478,6 +478,7 @@ export async function handleModelButtonInteraction(
     // 2. Perform requested action
     let actionMessage = '';
     try {
+      clearExhaustedFlashModels();
       const currentStatus = await getModelStatus();
       const count = Math.max(1, currentStatus.keyCount || 1);
       const liteTotalStr = (500 * count).toLocaleString();
@@ -549,14 +550,53 @@ export async function handleModelTextMessage(
 /**
  * Smart 429 Failover & Watchdog (Zero-Degradation / No-Lite Policy)
  *
- * Cascade chain:
- * 3.7 Flash -> 3.6 Flash -> 3.5 Flash -> STOP (Never switch to Lite!)
+ * Behavior:
+ * - Flash-Lite (3.1 Lite, 3.5 Lite): NO failover action. Claude Code handles 429 natively.
+ * - Flash models (3.5, 3.6, 3.7): When ANY flash model hits 429, rotates to another
+ *   available Flash model in the pool to continue work.
+ * - When all 3 Flash models are exhausted: STOP without switching to Lite,
+ *   leaving Claude Code to handle natively.
  */
+export const FLASH_PERFORMANCE_MODELS = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'];
+
+export const FLASH_FAILOVER_TARGETS: Record<string, string[]> = {
+  'gemini-3.7-flash': ['gemini-3.6-flash', 'gemini-3.5-flash'],
+  'gemini-3.6-flash': ['gemini-3.7-flash', 'gemini-3.5-flash'],
+  'gemini-3.5-flash': ['gemini-3.6-flash', 'gemini-3.7-flash'],
+};
+
 export const FLASH_FAILOVER_CHAIN: Record<string, string | null> = {
   'gemini-3.7-flash': 'gemini-3.6-flash',
-  'gemini-3.6-flash': 'gemini-3.5-flash',
-  'gemini-3.5-flash': null, // Strictly STOP, NEVER downgrade to Lite!
+  'gemini-3.6-flash': 'gemini-3.7-flash',
+  'gemini-3.5-flash': 'gemini-3.6-flash',
 };
+
+const exhaustedFlashModels = new Set<string>();
+
+export function getExhaustedFlashModels(): Set<string> {
+  return exhaustedFlashModels;
+}
+
+export function clearExhaustedFlashModels(): void {
+  exhaustedFlashModels.clear();
+}
+
+export function getNextFlashModel(currentModel: string): string | null {
+  if (!FLASH_PERFORMANCE_MODELS.includes(currentModel)) {
+    return null; // Not a Flash performance model (e.g. Flash-Lite); no failover
+  }
+
+  exhaustedFlashModels.add(currentModel);
+
+  const targets = FLASH_FAILOVER_TARGETS[currentModel] || [];
+  for (const target of targets) {
+    if (!exhaustedFlashModels.has(target)) {
+      return target;
+    }
+  }
+
+  return null; // All 3 Flash models exhausted! Strictly no Lite.
+}
 
 export const GIN_429_REGEX = /429\s*\|.*POST\s+"\/v1\/messages/;
 
@@ -637,26 +677,30 @@ export async function handleRateLimitDetected(
       currentModel = status.activeModel;
     }
 
-    // If current model is not in the Flash failover chain (e.g. Lite or unknown)
-    if (!(currentModel in FLASH_FAILOVER_CHAIN)) {
-      log.info('429 watchdog: Active model not in flash failover chain; leaving Claude Code to handle natively', {
-        currentModel,
-      });
+    // 1. If current model is not a Flash model (e.g. Flash-Lite):
+    // DO NOTHING. Claude Code handles 429 natively.
+    if (!FLASH_PERFORMANCE_MODELS.includes(currentModel)) {
+      log.info(
+        '429 watchdog: Active model is not a Flash performance model (e.g. Lite); leaving Claude Code to handle natively',
+        {
+          currentModel,
+        },
+      );
       return { action: 'ignored', from: currentModel };
     }
 
-    const nextModel = FLASH_FAILOVER_CHAIN[currentModel];
+    // 2. Find next available Flash model among {3.7, 3.6, 3.5}
+    const nextModel = getNextFlashModel(currentModel);
 
     if (nextModel) {
-      // Step down to next Flash model (3.7 -> 3.6 or 3.6 -> 3.5)
       log.info('429 watchdog: Auto-switching flash model', { from: currentModel, to: nextModel });
       await switchProxyModel(nextModel);
 
       await sendDiscordNotification({
-        title: '⚡ [스마트 페일오버] 고성능 모델 자동 전환 완료',
+        title: '⚡ [스마트 페일오버] Flash 모델 자동 전환 완료',
         description:
           `기존 활성 모델(**${currentModel}**)의 쿼터 소진(429)이 감지되었습니다.\n\n` +
-          `🚀 코드 품질 유지를 위해 고성능 후속 모델인 **${nextModel}**(으)로 즉시 자동 전환되었습니다.\n` +
+          `🚀 작업 유지를 위해 다른 고성능 Flash 모델인 **${nextModel}**(으)로 즉시 자동 전환되었습니다.\n` +
           `Claude Code가 내부 재시도 중이므로 작업이 끊김 없이 자동 복구되어 이어집니다.`,
         color: 0x3498db, // Blue
         fields: [
@@ -664,17 +708,17 @@ export async function handleRateLimitDetected(
           { name: '전환 모델', value: `\`${nextModel}\``, inline: true },
           { name: '안내', value: 'Claude Code 세션이 자동 재시도에 성공하면 작업이 계속 진행됩니다.', inline: false },
         ],
-        footer: { text: 'NanoClaw Watchdog • 코드 품질 보존 정책 가동 중' },
+        footer: { text: 'NanoClaw Watchdog • 고성능 Flash 풀 순환 가동 중' },
         timestamp: new Date().toISOString(),
       });
 
       return { action: 'switch', from: currentModel, to: nextModel };
     } else {
-      // nextModel === null: 3.5 Flash is exhausted!
+      // All 3 Flash models (3.7, 3.6, 3.5) exhausted!
       // Do NOT switch to Lite. Do NOT send task stop alerts.
       // Leave Claude Code 100% alone to follow its native retry and exit behavior.
       log.info(
-        '429 watchdog: All flash models exhausted. Leaving Claude Code to handle retries/errors natively without interference.',
+        '429 watchdog: All 3 Flash performance models (3.5, 3.6, 3.7) exhausted. Leaving Claude Code to handle retries/errors natively without interference.',
         { currentModel },
       );
 
