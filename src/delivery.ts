@@ -26,6 +26,7 @@ import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
 import { clearOutbox, readOutboxFiles, withExistingMailboxSession } from './session-manager.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
+import { finishProgressCard } from './modules/progress-card/index.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { PendingApproval, Session } from './types.js';
 import type { OutboundMessage } from './mailbox/index.js';
@@ -264,6 +265,7 @@ async function drainSession(session: Session): Promise<void> {
       await clearAttemptRow(msg.id);
       if (msg.kind !== 'system' && msg.channelType !== 'agent') {
         pauseTypingRefreshAfterDelivery(session.id);
+        void finishProgressCard(session.id);
         if (msg.kind !== 'task_log') {
           await fanOutboundMessage(
             {

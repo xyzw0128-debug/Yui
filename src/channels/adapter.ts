@@ -230,6 +230,9 @@ export interface ChannelAdapter {
   deliver(platformId: string, threadId: string | null, message: OutboundMessage): Promise<string | undefined>;
 
   // Optional
+  postMessage?(platformId: string, threadId: string | null, text: string): Promise<string | undefined>;
+  editMessage?(platformId: string, threadId: string | null, messageId: string, text: string): Promise<void>;
+  deleteMessage?(platformId: string, threadId: string | null, messageId: string): Promise<void>;
   setTyping?(
     platformId: string,
     threadId: string | null,

@@ -139,6 +139,37 @@ export async function setThreadTitle(key: string, platformId: string, threadId: 
   await adapter?.setThreadTitle?.(platformId, threadId, title);
 }
 
+export async function postChannelMessage(
+  key: string,
+  platformId: string,
+  threadId: string | null,
+  text: string,
+): Promise<string | undefined> {
+  const adapter = getChannelAdapterExact(key);
+  return adapter?.postMessage?.(platformId, threadId, text);
+}
+
+export async function editChannelMessage(
+  key: string,
+  platformId: string,
+  threadId: string | null,
+  messageId: string,
+  text: string,
+): Promise<void> {
+  const adapter = getChannelAdapterExact(key);
+  await adapter?.editMessage?.(platformId, threadId, messageId, text);
+}
+
+export async function deleteChannelMessage(
+  key: string,
+  platformId: string,
+  threadId: string | null,
+  messageId: string,
+): Promise<void> {
+  const adapter = getChannelAdapterExact(key);
+  await adapter?.deleteMessage?.(platformId, threadId, messageId);
+}
+
 /**
  * Registry passthrough for agent-view suggested prompts. Exact-key
  * resolution; missing adapter/capability is a silent no-op — prompts are

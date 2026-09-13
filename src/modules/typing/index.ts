@@ -20,6 +20,7 @@
 import fs from 'fs';
 
 import { heartbeatPath } from '../../session-manager.js';
+import { isProgressCardActive } from '../progress-card/index.js';
 
 const TYPING_REFRESH_MS = 4000;
 /**
@@ -141,7 +142,7 @@ export function startTypingRefresh(
     if (entry.pausedUntil > Date.now()) return;
 
     const withinGrace = Date.now() - entry.startedAt < TYPING_GRACE_MS;
-    if (withinGrace || isHeartbeatFresh(entry.agentGroupId, sessionId)) {
+    if (withinGrace || isHeartbeatFresh(entry.agentGroupId, sessionId) || isProgressCardActive(sessionId)) {
       triggerTyping(entry.channelType, entry.platformId, entry.threadId, entry.instance).catch(() => {});
       return;
     }

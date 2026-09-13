@@ -30,6 +30,7 @@ import {
 import { findSessionForAgent } from './db/sessions.js';
 import { backfillNewSession, fanInboundMessage } from './modules/cross-session-context/index.js';
 import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
+import { startProgressCard, stopProgressCard } from './modules/progress-card/index.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
 import { requestWake } from './request-wake.js';
@@ -654,13 +655,24 @@ async function deliverToAgent(
       effectiveThreadId,
       mg.instance,
     );
+    startProgressCard(
+      session.agent_group_id,
+      session.id,
+      event.channelType,
+      event.platformId,
+      effectiveThreadId,
+      mg.instance,
+    );
     const freshSession = await getSession(session.id);
     if (freshSession) {
       const woke = await requestWake(freshSession, 'inbound-message');
       // requestWake never throws — it returns false on transient spawn
       // failure (host-sweep retries). Stop the typing indicator we just
       // started so it doesn't leak; the inbound row stays pending.
-      if (!woke) stopTypingRefresh(freshSession.id);
+      if (!woke) {
+        stopTypingRefresh(freshSession.id);
+        stopProgressCard(freshSession.id);
+      }
     }
   }
 }

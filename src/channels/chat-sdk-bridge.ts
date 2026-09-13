@@ -963,6 +963,30 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       }
     },
 
+    async postMessage(platformId: string, threadId: string | null, text: string): Promise<string | undefined> {
+      const tid = threadId ?? platformId;
+      const result = await adapter.postMessage(tid, { markdown: text });
+      return result?.id;
+    },
+
+    async editMessage(platformId: string, threadId: string | null, messageId: string, text: string): Promise<void> {
+      const tid = threadId ?? platformId;
+      await adapter.editMessage(tid, messageId, { markdown: text });
+    },
+
+    async deleteMessage(platformId: string, threadId: string | null, messageId: string): Promise<void> {
+      const tid = threadId ?? platformId;
+      if (
+        typeof (adapter as unknown as { deleteMessage?: (tid: string, mid: string) => Promise<void> }).deleteMessage ===
+        'function'
+      ) {
+        await (adapter as unknown as { deleteMessage: (tid: string, mid: string) => Promise<void> }).deleteMessage(
+          tid,
+          messageId,
+        );
+      }
+    },
+
     async setTyping(platformId: string, threadId: string | null) {
       const tid = threadId ?? platformId;
       await adapter.startTyping(tid);

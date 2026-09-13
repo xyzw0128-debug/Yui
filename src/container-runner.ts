@@ -51,6 +51,7 @@ import { getGatewayProvider, type GatewayContribution } from './gateway-provider
 import { initGroupFilesystem } from './group-init.js';
 import { getAgentMailbox } from './mailbox/index.js';
 import { stopTypingRefresh } from './modules/typing/index.js';
+import { stopProgressCard } from './modules/progress-card/index.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './modules/mount-security/index.js';
 // Provider contracts use a separate barrel so update-skills identity detection
@@ -566,6 +567,11 @@ async function finish(sessionId: string, runtime: ActiveSessionRuntime, failure?
     stopTypingRefresh(sessionId);
   } catch (err) {
     log.error('Failed to stop typing refresh', { sessionId, containerName, err });
+  }
+  try {
+    stopProgressCard(sessionId);
+  } catch (err) {
+    log.error('Failed to stop progress card', { sessionId, containerName, err });
   }
 
   if (failure && failure.kind !== 'started-then-died') {
