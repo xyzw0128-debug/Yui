@@ -1,0 +1,24 @@
+# Cliproxy API Configuration Example
+# Maps Claude Code / Anthropic API requests to Google Gemini model pool
+
+port: 8317
+bind: 0.0.0.0
+
+# Gemini API Keys (Multi-key Pool for High Throughput)
+gemini:
+  keys:
+    - "AIzaSy_YOUR_GEMINI_KEY_01"
+    - "AIzaSy_YOUR_GEMINI_KEY_02"
+    - "AIzaSy_YOUR_GEMINI_KEY_03"
+    - "AIzaSy_YOUR_GEMINI_KEY_04"
+
+# Model Mapping & Fallback Chains
+models:
+  - name: "gemini-3.8-flash"
+    alias: "claude-3-7-sonnet-20250219"
+  - name: "gemini-3.8-flash"
+    alias: "claude-3-5-sonnet-20241022"
+  - name: "gemini-3.8-flash"
+    alias: "claude-opus-4-6-thinking"
+  - name: "gemini-3.8-flash"
+    alias: "claude-opus-5"

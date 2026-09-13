@@ -1,0 +1,27 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime & DB
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sock
+*.log
+
+# Node & Dependencies
+node_modules/
+dist/
+build/
+.pnpm-store/
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

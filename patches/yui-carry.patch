@@ -1,0 +1,210 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index e1170c5a..84487707 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -39,6 +39,8 @@ jobs:
+         run: pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit
+ 
+       - name: Host tests
++        env:
++          NODE_OPTIONS: "--no-deprecation"
+         run: pnpm exec vitest run
+ 
+       - name: Container tests
+diff --git a/src/channels/adapter.ts b/src/channels/adapter.ts
+index 5315c421..3aaee452 100644
+--- a/src/channels/adapter.ts
++++ b/src/channels/adapter.ts
+@@ -230,6 +230,9 @@ export interface ChannelAdapter {
+   deliver(platformId: string, threadId: string | null, message: OutboundMessage): Promise<string | undefined>;
+ 
+   // Optional
++  postMessage?(platformId: string, threadId: string | null, text: string): Promise<string | undefined>;
++  editMessage?(platformId: string, threadId: string | null, messageId: string, text: string): Promise<void>;
++  deleteMessage?(platformId: string, threadId: string | null, messageId: string): Promise<void>;
+   setTyping?(
+     platformId: string,
+     threadId: string | null,
+diff --git a/src/channels/discord.ts b/src/channels/discord.ts
+new file mode 100644
+index 00000000..f2bb09ec
+--- /dev/null
++++ b/src/channels/discord.ts
+@@ -0,0 +1,98 @@
++/**
++ * Discord channel adapter (v2) — uses Chat SDK bridge.
++ * Self-registers on import.
++ */
++import { createDiscordAdapter } from '@chat-adapter/discord';
++
++import { readEnvFile } from '../env.js';
++import type { ChannelDefaults } from './adapter.js';
++import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
++import { registerChannelAdapter } from './channel-registry.js';
++
++/**
++ * Dedicated bot app on a threaded platform. group threads:true matches the
++ * declared supportsThreads (the skill-installed install-style knob) so
++ * mention-sticky engagement stays bounded per-thread. dm.threads:false —
++ * DM replies land top-level, one session per DM.
++ */
++const DISCORD_DEFAULTS: ChannelDefaults = {
++  dm: { engageMode: 'pattern', engagePattern: '.', threads: false, unknownSenderPolicy: 'request_approval' },
++  group: { engageMode: 'mention-sticky', threads: true, unknownSenderPolicy: 'request_approval' },
++  mentions: 'platform',
++};
++
++// eslint-disable-next-line @typescript-eslint/no-explicit-any
++function extractReplyContext(raw: Record<string, any>): ReplyContext | null {
++  if (!raw.referenced_message) return null;
++  const reply = raw.referenced_message;
++  return {
++    text: reply.content || '',
++    sender: reply.author?.global_name || reply.author?.username || 'Unknown',
++  };
++}
++
++/**
++ * Discord message forwards carry their content in `message_snapshots`, not
++ * `content` (`message_reference.type === 1` means FORWARD; 0 is a normal
++ * reply). The adapter only reads `content`/`attachments`, so without this the
++ * agent sees an empty message. Unwrap the snapshot back into the payload so
++ * text, attachment download, and formatting all ride the existing path.
++ * Note: snapshots contain no author, so the original sender is unavailable.
++ */
++// eslint-disable-next-line @typescript-eslint/no-explicit-any
++export function unwrapForwardedSnapshot(data: Record<string, any>): void {
++  if (data.message_reference?.type !== 1) return;
++  const snaps = (data.message_snapshots ?? [])
++    // eslint-disable-next-line @typescript-eslint/no-explicit-any
++    .map((s: any) => s?.message)
++    .filter(Boolean);
++  if (snaps.length === 0) return;
++  // eslint-disable-next-line @typescript-eslint/no-explicit-any
++  const text = snaps
++    .map((m: any) => m.content)
++    .filter(Boolean)
++    .join('\n');
++  const label = '[Forwarded message]';
++  data.content = text ? `${label}\n${text}` : data.content || label;
++  // eslint-disable-next-line @typescript-eslint/no-explicit-any
++  const fwdAttachments = snaps.flatMap((m: any) => m.attachments ?? []);
++  if (fwdAttachments.length > 0) {
++    data.attachments = [...(data.attachments ?? []), ...fwdAttachments];
++  }
++}
++
++function unwrapForwards(adapter: ReturnType<typeof createDiscordAdapter>): void {
++  const a = adapter as unknown as {
++    handleForwardedMessage: (data: Record<string, unknown>, options?: unknown) => Promise<void>;
++  };
++  const orig = a.handleForwardedMessage.bind(adapter);
++  a.handleForwardedMessage = async (data, options) => {
++    unwrapForwardedSnapshot(data);
++    return orig(data, options);
++  };
++}
++
++registerChannelAdapter('discord', {
++  factory: () => {
++    const env = readEnvFile(['DISCORD_BOT_TOKEN', 'DISCORD_PUBLIC_KEY', 'DISCORD_APPLICATION_ID']);
++    if (!env.DISCORD_BOT_TOKEN) return null;
++    const discordAdapter = createDiscordAdapter({
++      botToken: env.DISCORD_BOT_TOKEN,
++      publicKey: env.DISCORD_PUBLIC_KEY,
++      applicationId: env.DISCORD_APPLICATION_ID,
++    });
++    unwrapForwards(discordAdapter);
++    return createChatSdkBridge({
++      adapter: discordAdapter,
++      concurrency: 'concurrent',
++      botToken: env.DISCORD_BOT_TOKEN,
++      extractReplyContext,
++      supportsThreads: true,
++      defaults: DISCORD_DEFAULTS,
++      // Discord rejects messages over 2000 chars; without this the bridge
++      // would let long agent replies fail instead of splitting them.
++      maxTextLength: 2000,
++    });
++  },
++  defaults: DISCORD_DEFAULTS,
++});
+diff --git a/src/channels/index.ts b/src/channels/index.ts
+index e9b3bd1b..3be776af 100644
+--- a/src/channels/index.ts
++++ b/src/channels/index.ts
+@@ -7,3 +7,4 @@
+ // self-registration import below.
+ 
+ import './cli.js';
++import './discord.js';
+diff --git a/src/container-runner.ts b/src/container-runner.ts
+index 1f6b8076..f4461e1f 100644
+--- a/src/container-runner.ts
++++ b/src/container-runner.ts
+@@ -51,6 +51,7 @@ import { getGatewayProvider, type GatewayContribution } from './gateway-provider
+ import { initGroupFilesystem } from './group-init.js';
+ import { getAgentMailbox } from './mailbox/index.js';
+ import { stopTypingRefresh } from './modules/typing/index.js';
++import { stopProgressCard } from './modules/progress-card/index.js';
+ import { log } from './log.js';
+ import { validateAdditionalMounts } from './modules/mount-security/index.js';
+ // Provider contracts use a separate barrel so update-skills identity detection
+@@ -337,7 +338,6 @@ async function spawnContainer(session: Session): Promise<void> {
+   const gateway = await getGatewayProvider().contribute({
+     key: { installSlug: INSTALL_SLUG, agentGroupId: agentGroup.id, sessionId: session.id },
+     groupName: agentGroup.name,
+-    containerName,
+     capabilities: driver.capabilities(),
+   });
+   if (gateway.containers?.length && !driver.capabilities().auxiliaryContainers) {
+@@ -568,6 +568,11 @@ async function finish(sessionId: string, runtime: ActiveSessionRuntime, failure?
+   } catch (err) {
+     log.error('Failed to stop typing refresh', { sessionId, containerName, err });
+   }
++  try {
++    stopProgressCard(sessionId);
++  } catch (err) {
++    log.error('Failed to stop progress card', { sessionId, containerName, err });
++  }
+ 
+   if (failure && failure.kind !== 'started-then-died') {
+     log.error('Session failed', { sessionId, containerName, kind: failure.kind, retryable: failure.retryable });
+diff --git a/src/router.ts b/src/router.ts
+index 18b4dabe..46ecc2b2 100644
+--- a/src/router.ts
++++ b/src/router.ts
+@@ -30,6 +30,7 @@ import {
+ import { findSessionForAgent } from './db/sessions.js';
+ import { backfillNewSession, fanInboundMessage } from './modules/cross-session-context/index.js';
+ import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
++import { startProgressCard, stopProgressCard } from './modules/progress-card/index.js';
+ import { log } from './log.js';
+ import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
+ import { requestWake } from './request-wake.js';
+@@ -654,13 +655,24 @@ async function deliverToAgent(
+       effectiveThreadId,
+       mg.instance,
+     );
++    startProgressCard(
++      session.agent_group_id,
++      session.id,
++      event.channelType,
++      event.platformId,
++      effectiveThreadId,
++      mg.instance,
++    );
+     const freshSession = await getSession(session.id);
+     if (freshSession) {
+       const woke = await requestWake(freshSession, 'inbound-message');
+       // requestWake never throws — it returns false on transient spawn
+       // failure (host-sweep retries). Stop the typing indicator we just
+       // started so it doesn't leak; the inbound row stays pending.
+-      if (!woke) stopTypingRefresh(freshSession.id);
++      if (!woke) {
++        stopTypingRefresh(freshSession.id);
++        stopProgressCard(freshSession.id);
++      }
+     }
+   }
+ }
