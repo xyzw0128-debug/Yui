@@ -69,12 +69,13 @@ describe('discord-model-console', () => {
       expect(row2Buttons[1].custom_id).toBe('model:3.6-flash');
       expect(row2Buttons[2].custom_id).toBe('model:3.7-flash');
 
-      // Row 3: Utility (status, restart)
+      // Row 3: Utility (status, restart, close)
       const row3Buttons = (payload.components[2] as { components: Array<Record<string, unknown>> }).components;
-      expect(row3Buttons).toHaveLength(2);
+      expect(row3Buttons).toHaveLength(3);
       expect(row3Buttons[0].custom_id).toBe('model:status');
       expect(row3Buttons[1].custom_id).toBe('model:restart');
       expect(row3Buttons[1].style).toBe(4); // Danger
+      expect(row3Buttons[2].custom_id).toBe('model:close');
     });
 
     it('builds a purple payload when 3.7 flash is active', () => {

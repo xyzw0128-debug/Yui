@@ -9,6 +9,8 @@ const CONFIG_PATH = '/home/lael/cliproxyapi/config.yaml';
 const CLIPROXY_PING_URL = 'http://172.17.0.1:8317/v1/models';
 const OWNER_DISCORD_ID = '631432379889745930';
 
+let isActionInProgress = false;
+
 const SONNET_ALIASES = [
   'claude-3-5-sonnet-20241022',
   'claude-3-7-sonnet-20250219',
@@ -77,6 +79,38 @@ export function isAuthorizedUser(userId?: string): boolean {
   if (userId === ownerId) return true;
   const adminList = process.env.MODEL_CONSOLE_ADMINS?.split(',').map((s) => s.trim()) || [];
   return adminList.includes(userId);
+}
+
+export async function probeAllKeys(): Promise<{ healthy: number; total: number; latencyMs: number }> {
+  try {
+    const config = fs.readFileSync(CONFIG_PATH, 'utf8');
+    const keys = [...config.matchAll(/api-key:\s*"([^"]+)"/g)].map((m) => m[1]);
+    if (keys.length === 0) return { healthy: 0, total: 0, latencyMs: -1 };
+
+    const t0 = Date.now();
+    const results = await Promise.all(
+      keys.map(async (k) => {
+        try {
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${k}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ parts: [{ text: 'p' }] }] }),
+              signal: AbortSignal.timeout(2500),
+            },
+          );
+          return res.status === 200 ? 1 : 0;
+        } catch {
+          return 0;
+        }
+      }),
+    );
+    const healthy = results.filter((s) => s === 1).length;
+    return { healthy, total: keys.length, latencyMs: Date.now() - t0 };
+  } catch {
+    return { healthy: 0, total: 0, latencyMs: -1 };
+  }
 }
 
 export async function getModelStatus(actionMessage?: string): Promise<ModelStatus> {
@@ -246,12 +280,12 @@ export function buildModelConsolePayload(
     color,
     fields,
     footer: {
-      text: `NanoClaw Model Console • ${requesterName ? `실행자: ${requesterName}` : 'OpenClaw Engine'}`,
+      text: `NanoClaw Console • ⏰ 한도 초기화: 매일 16:00 KST (PST 00:00)${requesterName ? ` • 실행자: ${requesterName}` : ''}`,
     },
     timestamp: new Date().toISOString(),
   };
 
-  // Row 1: Flash-Lite models (21,000 requests/day pool)
+  // Row 1: Flash-Lite models (7,000 requests/day pool)
   const is31Lite = status.activeModel === 'gemini-3.1-flash-lite';
   const is35Lite = status.activeModel === 'gemini-3.5-flash-lite';
   const row1 = {
@@ -316,6 +350,12 @@ export function buildModelConsolePayload(
         label: '🔄 프록시 재시작',
         custom_id: 'model:restart',
       },
+      {
+        type: 2,
+        style: 2, // Secondary (Grey)
+        label: '🗑️ 닫기',
+        custom_id: 'model:close',
+      },
     ],
   };
 
@@ -377,54 +417,90 @@ export async function handleModelButtonInteraction(
     return;
   }
 
-  // 1. Immediately acknowledge with deferred update (prevents 3s timeout)
-  await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      type: 6, // DEFERRED_UPDATE_MESSAGE
-    }),
-  });
-
-  // 2. Perform requested action
-  let actionMessage = '';
-  try {
-    if (customId === 'model:3.1-flash-lite') {
-      const model = await switchProxyModel('3.1-flash-lite');
-      actionMessage = `⚡ **${model}**(초경량/초고속 모드)로 전환되었습니다!`;
-    } else if (customId === 'model:flash-lite' || customId === 'model:3.5-flash-lite') {
-      const model = await switchProxyModel('3.5-flash-lite');
-      actionMessage = `🛡️ **${model}**(일상 추천/안전 모드)로 전환되었습니다! (일 21,000회 풀)`;
-    } else if (customId === 'model:flash' || customId === 'model:3.5-flash') {
-      const model = await switchProxyModel('3.5-flash');
-      actionMessage = `🚀 **${model}**(표준 고성능 모드)로 전환되었습니다!\n(주의: 일 20회 초과 시 429 가능)`;
-    } else if (customId === 'model:3.6-flash') {
-      const model = await switchProxyModel('3.6-flash');
-      actionMessage = `🚀 **${model}**(차세대 고성능 모드)로 전환되었습니다!\n(주의: 일 20회 초과 시 429 가능)`;
-    } else if (customId === 'model:3.7-flash') {
-      const model = await switchProxyModel('3.7-flash');
-      actionMessage = `🧠 **${model}**(심층 추론·Thinking 모드)로 전환되었습니다!\n(복잡한 코딩 및 아키텍처 추론 특화)`;
-    } else if (customId === 'model:restart') {
-      await restartProxyContainer();
-      actionMessage = '🔄 Cliproxy API 컨테이너를 성공적으로 재시작했습니다.';
-    } else if (customId === 'model:status') {
-      actionMessage = '📊 최신 프록시 상태와 지연시간을 갱신했습니다.';
-    }
-  } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    actionMessage = `❌ 작업 실패: ${errorMsg}`;
-    log.error('Model console action failed', { customId, err });
+  // Handle Close Button
+  if (customId === 'model:close') {
+    await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 6 }),
+    });
+    await fetch(`https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`, {
+      method: 'DELETE',
+    });
+    return;
   }
 
-  // 3. Update the original message with new status
-  const updatedStatus = await getModelStatus(actionMessage);
-  const payload = buildModelConsolePayload(updatedStatus, userName);
+  // Prevent concurrent button spamming
+  if (isActionInProgress) {
+    await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 4,
+        data: {
+          content: '⏳ 이전 작업이 아직 처리 중입니다. 잠시 후 다시 눌러주세요.',
+          flags: 64, // EPHEMERAL
+        },
+      }),
+    });
+    return;
+  }
 
-  await fetch(`https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  isActionInProgress = true;
+
+  try {
+    // 1. Immediately acknowledge with deferred update (prevents 3s timeout)
+    await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 6, // DEFERRED_UPDATE_MESSAGE
+      }),
+    });
+
+    // 2. Perform requested action
+    let actionMessage = '';
+    try {
+      if (customId === 'model:3.1-flash-lite') {
+        const model = await switchProxyModel('3.1-flash-lite');
+        actionMessage = `⚡ **${model}**(초경량/초고속 모드)로 전환되었습니다!`;
+      } else if (customId === 'model:flash-lite' || customId === 'model:3.5-flash-lite') {
+        const model = await switchProxyModel('3.5-flash-lite');
+        actionMessage = `🛡️ **${model}**(일상 추천/안전 모드)로 전환되었습니다! (일 ~7,000회 풀)`;
+      } else if (customId === 'model:flash' || customId === 'model:3.5-flash') {
+        const model = await switchProxyModel('3.5-flash');
+        actionMessage = `🚀 **${model}**(표준 고성능 모드)로 전환되었습니다!\n(주의: 일 280회 초과 시 429 가능)`;
+      } else if (customId === 'model:3.6-flash') {
+        const model = await switchProxyModel('3.6-flash');
+        actionMessage = `🚀 **${model}**(차세대 고성능 모드)로 전환되었습니다!\n(주의: 일 280회 초과 시 429 가능)`;
+      } else if (customId === 'model:3.7-flash') {
+        const model = await switchProxyModel('3.7-flash');
+        actionMessage = `🧠 **${model}**(심층 추론·Thinking 모드)로 전환되었습니다!\n(복잡한 코딩 및 아키텍처 추론 특화)`;
+      } else if (customId === 'model:restart') {
+        await restartProxyContainer();
+        actionMessage = '🔄 Cliproxy API 컨테이너를 성공적으로 재시작했습니다.';
+      } else if (customId === 'model:status') {
+        const probe = await probeAllKeys();
+        actionMessage = `📊 실시간 키 진단: **${probe.healthy}/${probe.total}개 키 정상 가동** (프로브 속도: ${probe.latencyMs}ms)`;
+      }
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      actionMessage = `❌ 작업 실패: ${errorMsg}`;
+      log.error('Model console action failed', { customId, err });
+    }
+
+    // 3. Update the original message with new status
+    const updatedStatus = await getModelStatus(actionMessage);
+    const payload = buildModelConsolePayload(updatedStatus, userName);
+
+    await fetch(`https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } finally {
+    isActionInProgress = false;
+  }
 }
 
 /**
