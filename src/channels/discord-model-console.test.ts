@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { isAuthorizedUser, buildModelConsolePayload, type ModelStatus } from './discord-model-console.js';
+import {
+  isAuthorizedUser,
+  buildModelConsolePayload,
+  type ModelStatus,
+  FLASH_FAILOVER_CHAIN,
+  GIN_429_REGEX,
+  recordActiveDiscordChannel,
+  getActiveDiscordChannel,
+  handleRateLimitDetected,
+} from './discord-model-console.js';
 
 describe('discord-model-console', () => {
   const originalEnv = process.env;
@@ -123,6 +132,92 @@ describe('discord-model-console', () => {
       const actionField = fields.find((f) => f.name.includes('작업 결과'));
       expect(actionField).toBeDefined();
       expect(actionField?.value).toBe('모델 전환 성공');
+    });
+  });
+
+  describe('FLASH_FAILOVER_CHAIN (Zero-Degradation Policy)', () => {
+    it('cascades from 3.7-flash to 3.6-flash', () => {
+      expect(FLASH_FAILOVER_CHAIN['gemini-3.7-flash']).toBe('gemini-3.6-flash');
+    });
+
+    it('cascades from 3.6-flash to 3.5-flash', () => {
+      expect(FLASH_FAILOVER_CHAIN['gemini-3.6-flash']).toBe('gemini-3.5-flash');
+    });
+
+    it('STRICT: halts at 3.5-flash and NEVER cascades to Lite models', () => {
+      expect(FLASH_FAILOVER_CHAIN['gemini-3.5-flash']).toBeNull();
+    });
+
+    it('does not include Lite models in failover chain to protect code integrity', () => {
+      expect(FLASH_FAILOVER_CHAIN['gemini-3.5-flash-lite']).toBeUndefined();
+      expect(FLASH_FAILOVER_CHAIN['gemini-3.1-flash-lite']).toBeUndefined();
+    });
+  });
+
+  describe('GIN_429_REGEX', () => {
+    it('matches Gin logger 429 error on /v1/messages', () => {
+      const sample =
+        '[2026-09-13 07:23:37] [c5866540] [warn ] [gin_logger.go:101] 429 | 5.384s | 172.18.0.1 | POST "/v1/messages?beta=true"';
+      expect(GIN_429_REGEX.test(sample)).toBe(true);
+    });
+
+    it('matches Gin logger 429 on /v1/messages without query params', () => {
+      const sample =
+        '[2026-09-13 07:23:37] [c5866540] [warn ] [gin_logger.go:101] 429 | 150ms | 172.18.0.1 | POST "/v1/messages"';
+      expect(GIN_429_REGEX.test(sample)).toBe(true);
+    });
+
+    it('does not match 200 OK responses on /v1/messages', () => {
+      const sample =
+        '[2026-09-13 07:23:37] [c5866540] [info ] [gin_logger.go:103] 200 | 2.181s | 172.18.0.1 | POST "/v1/messages?beta=true"';
+      expect(GIN_429_REGEX.test(sample)).toBe(false);
+    });
+
+    it('does not match 404 or other paths', () => {
+      const sample =
+        '[2026-09-13 07:26:41] [--------] [warn ] [gin_logger.go:101] 404 | 0s | 172.18.0.1 | GET "/metrics"';
+      expect(GIN_429_REGEX.test(sample)).toBe(false);
+    });
+
+    it('does not match 429 on /v1/models', () => {
+      const sample =
+        '[2026-09-13 07:32:06] [e7c0123d] [warn ] [gin_logger.go:101] 429 | 0s | 172.18.0.1 | GET "/v1/models"';
+      expect(GIN_429_REGEX.test(sample)).toBe(false);
+    });
+  });
+
+  describe('recordActiveDiscordChannel', () => {
+    it('defaults to the configured default channel ID', () => {
+      expect(getActiveDiscordChannel()).toBe('1547919112523747328');
+    });
+
+    it('updates active channel when a valid channel ID is passed', () => {
+      recordActiveDiscordChannel('999888777666555444');
+      expect(getActiveDiscordChannel()).toBe('999888777666555444');
+      // Reset back to default for test isolation
+      recordActiveDiscordChannel('1547919112523747328');
+    });
+
+    it('ignores empty or short invalid channel IDs', () => {
+      recordActiveDiscordChannel('');
+      expect(getActiveDiscordChannel()).toBe('1547919112523747328');
+      recordActiveDiscordChannel('123');
+      expect(getActiveDiscordChannel()).toBe('1547919112523747328');
+    });
+  });
+
+  describe('handleRateLimitDetected (Safety Stop Behavior)', () => {
+    it('strictly triggers STOP when 3.5-flash hits 429 without downgrading to Lite', async () => {
+      const result = await handleRateLimitDetected('gemini-3.5-flash', true);
+      expect(result.action).toBe('stop');
+      expect(result.from).toBe('gemini-3.5-flash');
+      expect(result.to).toBeNull();
+    });
+
+    it('ignores and does not switch if current model is already a Lite model', async () => {
+      const result = await handleRateLimitDetected('gemini-3.5-flash-lite', true);
+      expect(result.action).toBe('ignored');
+      expect(result.from).toBe('gemini-3.5-flash-lite');
     });
   });
 });

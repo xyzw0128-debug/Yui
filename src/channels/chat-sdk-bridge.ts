@@ -31,6 +31,9 @@ import {
   handleModelSlashCommand,
   handleModelButtonInteraction,
   handleModelTextMessage,
+  recordActiveDiscordChannel,
+  startModelFailoverWatchdog,
+  stopModelFailoverWatchdog,
 } from './discord-model-console.js';
 
 /** Adapter with optional gateway support (e.g., Discord). */
@@ -751,6 +754,9 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         // Start local HTTP server to receive forwarded Gateway events (including interactions)
         const webhookUrl = await startLocalWebhookServer(gatewayAdapter, setupConfig, config.botToken);
 
+        // Start 429 smart failover watchdog
+        startModelFailoverWatchdog(config.botToken);
+
         // Exponential backoff capped at 1h. Without this, an unrecoverable
         // failure (e.g., TokenInvalid) restarts ~10×/sec and Discord's
         // Cloudflare layer issues a multi-hour IP block. A run that lasts
@@ -1013,6 +1019,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     },
 
     async teardown() {
+      stopModelFailoverWatchdog();
       gatewayAbort?.abort();
       await chat.shutdown();
       log.info('Chat SDK bridge shut down', { adapter: adapter.name });
@@ -1107,6 +1114,9 @@ export async function handleForwardedEvent(
   // Handle interaction events (button clicks & slash commands) — not handled by adapter's handleForwardedGatewayEvent
   if (event.type === 'GATEWAY_INTERACTION_CREATE' && event.data) {
     const interaction = event.data;
+    if (interaction.channel_id) {
+      recordActiveDiscordChannel(interaction.channel_id as string);
+    }
 
     // type 2 = Slash Command (Application Command)
     if (interaction.type === 2) {
@@ -1205,6 +1215,9 @@ export async function handleForwardedEvent(
   // Handle plain text commands (!model, !모델)
   if (event.type === 'GATEWAY_MESSAGE_CREATE' && event.data) {
     const messageData = event.data;
+    if (messageData.channel_id) {
+      recordActiveDiscordChannel(messageData.channel_id as string);
+    }
     const author = messageData.author as Record<string, unknown> | undefined;
     if (!author?.bot) {
       const rawContent = ((messageData.content as string) || '').trim();

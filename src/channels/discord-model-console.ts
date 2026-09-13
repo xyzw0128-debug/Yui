@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { exec } from 'child_process';
+import { exec, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { log } from '../log.js';
 
@@ -522,4 +522,259 @@ export async function handleModelTextMessage(
     },
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * Smart 429 Failover & Watchdog (Zero-Degradation / No-Lite Policy)
+ *
+ * Cascade chain:
+ * 3.7 Flash -> 3.6 Flash -> 3.5 Flash -> STOP (Never switch to Lite!)
+ */
+export const FLASH_FAILOVER_CHAIN: Record<string, string | null> = {
+  'gemini-3.7-flash': 'gemini-3.6-flash',
+  'gemini-3.6-flash': 'gemini-3.5-flash',
+  'gemini-3.5-flash': null, // Strictly STOP, NEVER downgrade to Lite!
+};
+
+export const GIN_429_REGEX = /429\s*\|.*POST\s+"\/v1\/messages/;
+
+let activeDiscordChannelId = '1547919112523747328'; // Lael's DM channel default
+let storedDiscordBotToken: string | null = null;
+let isFailoverInProgress = false;
+let lastFailoverAt = 0;
+const FAILOVER_COOLDOWN_MS = 15000; // 15 seconds cooldown
+
+export function recordActiveDiscordChannel(channelId?: string): void {
+  if (channelId && channelId.length > 5) {
+    activeDiscordChannelId = channelId;
+  }
+}
+
+export function getActiveDiscordChannel(): string {
+  return activeDiscordChannelId;
+}
+
+export function setDiscordBotToken(token?: string): void {
+  if (token) {
+    storedDiscordBotToken = token;
+  }
+}
+
+export function getDiscordBotToken(): string | null {
+  return storedDiscordBotToken || process.env.DISCORD_BOT_TOKEN || null;
+}
+
+export async function sendDiscordNotification(embed: Record<string, unknown>): Promise<boolean> {
+  const token = getDiscordBotToken();
+  if (!token || !activeDiscordChannelId) {
+    log.warn('Cannot send failover alert: Discord bot token or channel ID missing', {
+      hasToken: Boolean(token),
+      channelId: activeDiscordChannelId,
+    });
+    return false;
+  }
+
+  try {
+    const res = await fetch(`https://discord.com/api/v10/channels/${activeDiscordChannelId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bot ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ embeds: [embed] }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      log.warn('Failed to send Discord alert', { status: res.status, body: errText });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log.error('Error sending Discord alert', { err });
+    return false;
+  }
+}
+
+export async function handleRateLimitDetected(
+  overrideCurrentModel?: string,
+  skipCooldown = false,
+): Promise<{ action: 'switch' | 'stop' | 'ignored'; from?: string; to?: string | null }> {
+  const now = Date.now();
+  if (!skipCooldown && (isFailoverInProgress || now - lastFailoverAt < FAILOVER_COOLDOWN_MS)) {
+    log.info('429 watchdog: Skip failover, cooldown active or action in progress');
+    return { action: 'ignored' };
+  }
+
+  isFailoverInProgress = true;
+  lastFailoverAt = now;
+
+  try {
+    let currentModel = overrideCurrentModel;
+    if (!currentModel) {
+      const status = await getModelStatus();
+      currentModel = status.activeModel;
+    }
+
+    // If current model is not in the Flash failover chain (e.g. Lite or unknown)
+    if (!(currentModel in FLASH_FAILOVER_CHAIN)) {
+      log.warn('429 watchdog: Active model not in flash failover chain', { currentModel });
+      if (currentModel.includes('flash-lite')) {
+        await sendDiscordNotification({
+          title: '⚠️ [할당량 초과] Flash-Lite 쿼터 소진 감지',
+          description: `현재 활성 모델(**${currentModel}**)에서 429(Rate Limit)가 감지되었습니다.\n모든 키의 일일 할당량이 소진되었을 수 있습니다.`,
+          color: 0xe67e22,
+          footer: { text: 'NanoClaw Watchdog • ⏰ 초기화: 매일 16:00 KST' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+      return { action: 'ignored', from: currentModel };
+    }
+
+    const nextModel = FLASH_FAILOVER_CHAIN[currentModel];
+
+    if (nextModel) {
+      // Step down to next Flash model
+      log.info('429 watchdog: Auto-switching flash model', { from: currentModel, to: nextModel });
+      await switchProxyModel(nextModel);
+
+      await sendDiscordNotification({
+        title: '⚡ [스마트 페일오버] 고성능 모델 자동 전환 완료',
+        description:
+          `기존 활성 모델(**${currentModel}**)의 쿼터 소진(429)이 감지되었습니다.\n\n` +
+          `🚀 코드 품질 유지를 위해 고성능 후속 모델인 **${nextModel}**(으)로 즉시 자동 전환되었습니다.\n` +
+          `Claude Code가 내부 재시도 중이므로 작업이 끊김 없이 자동 복구되어 이어집니다.`,
+        color: 0x3498db, // Blue
+        fields: [
+          { name: '이전 모델', value: `\`${currentModel}\``, inline: true },
+          { name: '전환 모델', value: `\`${nextModel}\``, inline: true },
+          { name: '안내', value: 'Claude Code 세션이 자동 재시도에 성공하면 작업이 계속 진행됩니다.', inline: false },
+        ],
+        footer: { text: 'NanoClaw Watchdog • 코드 품질 보존 정책 가동 중' },
+        timestamp: new Date().toISOString(),
+      });
+
+      return { action: 'switch', from: currentModel, to: nextModel };
+    } else {
+      // nextModel === null: 3.5 Flash is exhausted!
+      // STRICT POLICY: STOP & TERMINATE TASK. NEVER SWITCH TO LITE!
+      log.warn('429 watchdog: All flash models exhausted! Stopping task to protect code integrity', {
+        currentModel,
+      });
+
+      await sendDiscordNotification({
+        title: '🚨 [작업 중단] 고성능 Flash 모델 일일 쿼터 전면 소진',
+        description:
+          `고성능 Flash 모델군(3.7, 3.6, 3.5 Flash)의 일일 쿼터가 모두 소진되었습니다 (429 Rate Limit).\n\n` +
+          `🛡️ **코드 오염 방지 정책 가동 (Lite 자동 전환 금지)**\n` +
+          `Flash-Lite 모델은 추론 능력 제약으로 인해 복잡한 코드 작성이나 리팩토링 시 코드가 꼬이거나 손상될 위험이 있습니다.\n` +
+          `따라서 **Lite 모델로 자동 전환하지 않고 안전하게 작업을 중단**했습니다.\n\n` +
+          `⏰ **한도 초기화 시간**: 매일 16:00 KST (PST 00:00)\n` +
+          `💡 일상 대화나 단순 질의를 위해 Lite 모델을 사용하시려면 Discord에서 \`/model\` 콘솔을 열어 수동으로 전환하실 수 있습니다.`,
+        color: 0xe74c3c, // Red
+        fields: [
+          { name: '소진된 모델', value: 'Gemini 3.7 Flash, 3.6 Flash, 3.5 Flash', inline: false },
+          {
+            name: '조치 사항',
+            value: '현재 진행 중이던 Claude Code 작업이 안전하게 중단(Pause)되었습니다.',
+            inline: false,
+          },
+        ],
+        footer: { text: 'NanoClaw Safety Guard • 매일 16:00 KST 리셋' },
+        timestamp: new Date().toISOString(),
+      });
+
+      return { action: 'stop', from: currentModel, to: null };
+    }
+  } catch (err) {
+    log.error('429 watchdog failover failed', { err });
+    return { action: 'ignored' };
+  } finally {
+    isFailoverInProgress = false;
+  }
+}
+
+let watchdogProcess: ChildProcess | null = null;
+let watchdogRestartTimer: NodeJS.Timeout | null = null;
+let isWatchdogStopping = false;
+
+export function startModelFailoverWatchdog(botToken?: string): void {
+  if (botToken) {
+    setDiscordBotToken(botToken);
+  }
+
+  if (watchdogProcess) {
+    log.info('429 watchdog already running');
+    return;
+  }
+
+  isWatchdogStopping = false;
+
+  const runStream = () => {
+    if (isWatchdogStopping) return;
+
+    try {
+      log.info('Starting cliproxyapi docker log watchdog stream...');
+      const child = spawn('docker', ['logs', '-f', '-n', '0', 'cliproxyapi'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      watchdogProcess = child;
+
+      let lineBuffer = '';
+
+      const processData = (chunk: Buffer) => {
+        lineBuffer += chunk.toString('utf8');
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (GIN_429_REGEX.test(line)) {
+            log.warn('429 watchdog detected 429 on /v1/messages in cliproxy log', { line: line.trim() });
+            void handleRateLimitDetected();
+            break;
+          }
+        }
+      };
+
+      child.stdout?.on('data', processData);
+      child.stderr?.on('data', processData);
+
+      child.on('error', (err) => {
+        log.warn('429 watchdog process error', { err });
+      });
+
+      child.on('exit', (code, signal) => {
+        watchdogProcess = null;
+        log.info('429 watchdog process exited', { code, signal });
+        if (!isWatchdogStopping) {
+          if (watchdogRestartTimer) clearTimeout(watchdogRestartTimer);
+          watchdogRestartTimer = setTimeout(() => {
+            runStream();
+          }, 3000);
+        }
+      });
+    } catch (err) {
+      log.error('Failed to spawn 429 watchdog process', { err });
+      if (!isWatchdogStopping) {
+        if (watchdogRestartTimer) clearTimeout(watchdogRestartTimer);
+        watchdogRestartTimer = setTimeout(() => {
+          runStream();
+        }, 5000);
+      }
+    }
+  };
+
+  runStream();
+}
+
+export function stopModelFailoverWatchdog(): void {
+  isWatchdogStopping = true;
+  if (watchdogRestartTimer) {
+    clearTimeout(watchdogRestartTimer);
+    watchdogRestartTimer = null;
+  }
+  if (watchdogProcess) {
+    watchdogProcess.kill('SIGTERM');
+    watchdogProcess = null;
+  }
 }
