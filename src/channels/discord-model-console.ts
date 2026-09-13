@@ -30,35 +30,35 @@ export const SUPPORTED_MODELS: Record<string, ModelOption> = {
     id: 'gemini-3.1-flash-lite',
     name: '3.1 Flash-Lite',
     badge: '⚡ 초경량/초고속',
-    quota: '일 ~21,000회 (안전)',
+    quota: '일 ~7,000회 (500회/키, 15 RPM)',
   },
   '3.5-flash-lite': {
     key: '3.5-flash-lite',
     id: 'gemini-3.5-flash-lite',
     name: '3.5 Flash-Lite',
     badge: '🛡️ 일상 추천/안전',
-    quota: '일 ~21,000회 (안전)',
+    quota: '일 ~7,000회 (500회/키, 15 RPM)',
   },
   '3.5-flash': {
     key: '3.5-flash',
     id: 'gemini-3.5-flash',
     name: '3.5 Flash',
     badge: '🚀 표준 고성능',
-    quota: '일 280회 (20회/키)',
+    quota: '일 280회 (20회/키, 5 RPM)',
   },
   '3.6-flash': {
     key: '3.6-flash',
     id: 'gemini-3.6-flash',
     name: '3.6 Flash',
     badge: '🚀 최신 고성능',
-    quota: '일 280회 (20회/키)',
+    quota: '일 280회 (20회/키, 5 RPM)',
   },
   '3.7-flash': {
     key: '3.7-flash',
     id: 'gemini-3.7-flash',
     name: '3.7 Flash',
     badge: '🧠 심층 추론(Thinking)',
-    quota: '일 280회 (코딩/추론 특화)',
+    quota: '일 280회 (20회/키, 5 RPM)',
   },
 };
 
@@ -221,13 +221,13 @@ export function buildModelConsolePayload(
       inline: false,
     },
     {
-      name: '📋 선택 가능한 5개 모델 안내',
+      name: '📋 선택 가능한 5개 모델 안내 (14개 키 풀 기준)',
       value:
-        '• `gemini-3.1-flash-lite`: ⚡ 초경량 / 초고속 / 일 ~21,000회\n' +
-        '• `gemini-3.5-flash-lite`: 🛡️ 1M 컨텍스트 / 시각 / **일상 추천 (일 ~21,000회)** ⭐\n' +
-        '• `gemini-3.5-flash`: 🚀 표준 고성능 플래시 (일 280회)\n' +
-        '• `gemini-3.6-flash`: 🚀 차세대 고성능 플래시 (일 280회)\n' +
-        '• `gemini-3.7-flash`: 🧠 심층 추론(Thinking) / **코딩·논리 특화**',
+        '• `gemini-3.1-flash-lite`: ⚡ 초경량 / 초고속 • **일 7,000회** (500회/키, 15 RPM)\n' +
+        '• `gemini-3.5-flash-lite`: 🛡️ 1M 컨텍스트 / 비전 • **일상 추천 (일 7,000회)** ⭐\n' +
+        '• `gemini-3.5-flash`: 🚀 표준 고성능 플래시 • 일 280회 (20회/키, 5 RPM)\n' +
+        '• `gemini-3.6-flash`: 🚀 차세대 고성능 플래시 • 일 280회 (20회/키, 5 RPM)\n' +
+        '• `gemini-3.7-flash`: 🧠 심층 추론(Thinking) • 일 280회 (코딩·논리 특화)',
       inline: false,
     },
   ];
