@@ -76,12 +76,13 @@ describe('discord-model-console', () => {
       expect(row1Buttons[1].style).toBe(3); // Active
       expect(row1Buttons[1].label).toContain('[활성]');
 
-      // Row 2: 3.5, 3.6, 3.7 Flash
+      // Row 2: 3.5, 3.6, 3.7, 3.8 Flash
       const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
-      expect(row2Buttons).toHaveLength(3);
+      expect(row2Buttons).toHaveLength(4);
       expect(row2Buttons[0].custom_id).toBe('model:3.5-flash');
       expect(row2Buttons[1].custom_id).toBe('model:3.6-flash');
       expect(row2Buttons[2].custom_id).toBe('model:3.7-flash');
+      expect(row2Buttons[3].custom_id).toBe('model:3.8-flash');
 
       // Row 3: Utility (status, restart, close)
       const row3Buttons = (payload.components[2] as { components: Array<Record<string, unknown>> }).components;
@@ -107,6 +108,23 @@ describe('discord-model-console', () => {
       const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
       expect(row2Buttons[2].style).toBe(3); // Active
       expect(row2Buttons[2].label).toContain('[활성]');
+    });
+
+    it('builds a purple payload when 3.8 flash is active', () => {
+      const status: ModelStatus = {
+        activeModel: 'gemini-3.8-flash',
+        keyCount: 14,
+        dockerStatus: 'running',
+        httpOk: true,
+        pingMs: 50,
+      };
+
+      const payload = buildModelConsolePayload(status);
+      expect(payload.embeds[0].color).toBe(0x9b59b6);
+
+      const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
+      expect(row2Buttons[3].style).toBe(3); // Active
+      expect(row2Buttons[3].label).toContain('[활성]');
     });
 
     it('builds a red payload when httpOk is false', () => {
@@ -145,20 +163,27 @@ describe('discord-model-console', () => {
       clearExhaustedFlashModels();
     });
 
-    it('contains only 3.7, 3.6, and 3.5 Flash models', () => {
-      expect(FLASH_PERFORMANCE_MODELS).toEqual(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash']);
+    it('contains only 3.8, 3.7, 3.6, and 3.5 Flash models', () => {
+      expect(FLASH_PERFORMANCE_MODELS).toEqual([
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+      ]);
     });
 
-    it('cascades from 3.7-flash to 3.6-flash then 3.5-flash then stops', () => {
+    it('cascades from 3.8-flash through 3.7, 3.6, 3.5 then stops', () => {
+      expect(getNextFlashModel('gemini-3.8-flash')).toBe('gemini-3.7-flash');
       expect(getNextFlashModel('gemini-3.7-flash')).toBe('gemini-3.6-flash');
       expect(getNextFlashModel('gemini-3.6-flash')).toBe('gemini-3.5-flash');
       expect(getNextFlashModel('gemini-3.5-flash')).toBeNull();
     });
 
-    it('cascades from 3.5-flash to 3.6-flash then 3.7-flash then stops', () => {
-      expect(getNextFlashModel('gemini-3.5-flash')).toBe('gemini-3.6-flash');
-      expect(getNextFlashModel('gemini-3.6-flash')).toBe('gemini-3.7-flash');
-      expect(getNextFlashModel('gemini-3.7-flash')).toBeNull();
+    it('cascades from 3.5-flash to 3.8-flash then 3.7-flash then 3.6-flash then stops', () => {
+      expect(getNextFlashModel('gemini-3.5-flash')).toBe('gemini-3.8-flash');
+      expect(getNextFlashModel('gemini-3.8-flash')).toBe('gemini-3.7-flash');
+      expect(getNextFlashModel('gemini-3.7-flash')).toBe('gemini-3.6-flash');
+      expect(getNextFlashModel('gemini-3.6-flash')).toBeNull();
     });
 
     it('STRICT: never rotates from Lite models (3.5-flash-lite, 3.1-flash-lite)', () => {
@@ -227,15 +252,19 @@ describe('discord-model-console', () => {
     it('rotates from 3.5-flash to other Flash models and stops when all are exhausted', async () => {
       const res1 = await handleRateLimitDetected('gemini-3.5-flash', true);
       expect(res1.action).toBe('switch');
-      expect(res1.to).toBe('gemini-3.6-flash');
+      expect(res1.to).toBe('gemini-3.8-flash');
 
-      const res2 = await handleRateLimitDetected('gemini-3.6-flash', true);
+      const res2 = await handleRateLimitDetected('gemini-3.8-flash', true);
       expect(res2.action).toBe('switch');
       expect(res2.to).toBe('gemini-3.7-flash');
 
       const res3 = await handleRateLimitDetected('gemini-3.7-flash', true);
-      expect(res3.action).toBe('stop');
-      expect(res3.to).toBeNull();
+      expect(res3.action).toBe('switch');
+      expect(res3.to).toBe('gemini-3.6-flash');
+
+      const res4 = await handleRateLimitDetected('gemini-3.6-flash', true);
+      expect(res4.action).toBe('stop');
+      expect(res4.to).toBeNull();
     });
 
     it('ignores and does not switch if current model is a Lite model (3.5 or 3.1 Lite)', async () => {
@@ -279,7 +308,7 @@ describe('discord-model-console', () => {
       const payload20 = buildModelConsolePayload(status20);
       const fields = payload20.embeds[0].fields as Array<{ name: string; value: string }>;
 
-      const guideField = fields.find((f) => f.name.includes('선택 가능한 5개 모델 안내'));
+      const guideField = fields.find((f) => f.name.includes('선택 가능한 6개 모델 안내'));
       expect(guideField?.name).toContain('(20개 키 풀 기준)');
       expect(guideField?.value).toContain('일 ~10,000회'); // 20 * 500
       expect(guideField?.value).toContain('일 400회'); // 20 * 20

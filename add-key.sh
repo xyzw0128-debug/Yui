@@ -1,1 +1,0 @@
-/home/lael/cliproxyapi/add-key.sh

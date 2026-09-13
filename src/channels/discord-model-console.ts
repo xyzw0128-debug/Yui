@@ -68,6 +68,14 @@ export const SUPPORTED_MODELS: Record<string, ModelOption> = {
     quotaPerKey: 20,
     rpmPerKey: 5,
   },
+  '3.8-flash': {
+    key: '3.8-flash',
+    id: 'gemini-3.8-flash',
+    name: '3.8 Flash',
+    badge: '⚡ 초고속 심층 코딩/Agentic',
+    quotaPerKey: 20,
+    rpmPerKey: 5,
+  },
 };
 
 export function formatModelQuota(model: ModelOption, keyCount: number): string {
@@ -240,7 +248,7 @@ export function buildModelConsolePayload(
   components: Array<Record<string, unknown>>;
 } {
   const isLite = status.activeModel.includes('flash-lite');
-  const isThinking = status.activeModel.includes('3.7');
+  const isThinking = status.activeModel.includes('3.7') || status.activeModel.includes('3.8');
   const color = !status.httpOk ? 0xe74c3c : isLite ? 0x2ecc71 : isThinking ? 0x9b59b6 : 0xf39c12;
 
   const count = Math.max(1, status.keyCount || 1);
@@ -272,13 +280,14 @@ export function buildModelConsolePayload(
       inline: false,
     },
     {
-      name: `📋 선택 가능한 5개 모델 안내 (${count}개 키 풀 기준)`,
+      name: `📋 선택 가능한 6개 모델 안내 (${count}개 키 풀 기준)`,
       value:
         `• \`gemini-3.1-flash-lite\`: ⚡ 초경량 / 초고속 • **일 ~${liteTotalStr}회** (500회/키, 15 RPM)\n` +
         `• \`gemini-3.5-flash-lite\`: 🛡️ 1M 컨텍스트 / 비전 • **일상 추천 (일 ~${liteTotalStr}회)** ⭐\n` +
         `• \`gemini-3.5-flash\`: 🚀 표준 고성능 플래시 • 일 ${flashTotalStr}회 (20회/키, 5 RPM)\n` +
         `• \`gemini-3.6-flash\`: 🚀 차세대 고성능 플래시 • 일 ${flashTotalStr}회 (20회/키, 5 RPM)\n` +
-        `• \`gemini-3.7-flash\`: 🧠 심층 추론(Thinking) • 일 ${flashTotalStr}회 (코딩·논리 특화)`,
+        `• \`gemini-3.7-flash\`: 🧠 심층 추론(Thinking) • 일 ${flashTotalStr}회 (코딩·논리 특화)\n` +
+        `• \`gemini-3.8-flash\`: ⚡ 초고속 심층 코딩/Agentic • 일 ${flashTotalStr}회 (최신 자율 에이전트)`,
       inline: false,
     },
   ];
@@ -327,6 +336,7 @@ export function buildModelConsolePayload(
   const is35Flash = status.activeModel === 'gemini-3.5-flash';
   const is36Flash = status.activeModel === 'gemini-3.6-flash';
   const is37Flash = status.activeModel === 'gemini-3.7-flash';
+  const is38Flash = status.activeModel === 'gemini-3.8-flash';
   const row2 = {
     type: 1, // ActionRow
     components: [
@@ -345,8 +355,14 @@ export function buildModelConsolePayload(
       {
         type: 2,
         style: is37Flash ? 3 : 2,
-        label: is37Flash ? '🧠 3.7 Flash [활성]' : '🧠 3.7 Flash (추론형)',
+        label: is37Flash ? '🧠 3.7 Flash [활성]' : '🧠 3.7 Flash',
         custom_id: 'model:3.7-flash',
+      },
+      {
+        type: 2,
+        style: is38Flash ? 3 : 2,
+        label: is38Flash ? '⚡ 3.8 Flash [활성]' : '⚡ 3.8 Flash (최신🚀)',
+        custom_id: 'model:3.8-flash',
       },
     ],
   };
@@ -499,6 +515,9 @@ export async function handleModelButtonInteraction(
       } else if (customId === 'model:3.7-flash') {
         const model = await switchProxyModel('3.7-flash');
         actionMessage = `🧠 **${model}**(심층 추론·Thinking 모드)로 전환되었습니다!\n(일 ${flashTotalStr}회 풀, 코딩·논리 특화, 5 RPM)`;
+      } else if (customId === 'model:3.8-flash') {
+        const model = await switchProxyModel('3.8-flash');
+        actionMessage = `⚡ **${model}**(초고속 심층 코딩/Agentic 모드)로 전환되었습니다!\n(일 ${flashTotalStr}회 풀, 최신 자율 에이전트, 5 RPM)`;
       } else if (customId === 'model:restart') {
         await restartProxyContainer();
         actionMessage = '🔄 Cliproxy API 컨테이너를 성공적으로 재시작했습니다.';
@@ -552,23 +571,30 @@ export async function handleModelTextMessage(
  *
  * Behavior:
  * - Flash-Lite (3.1 Lite, 3.5 Lite): NO failover action. Claude Code handles 429 natively.
- * - Flash models (3.5, 3.6, 3.7): When ANY flash model hits 429, rotates to another
+ * - Flash models (3.5, 3.6, 3.7, 3.8): When ANY flash model hits 429, rotates to another
  *   available Flash model in the pool to continue work.
- * - When all 3 Flash models are exhausted: STOP without switching to Lite,
+ * - When all 4 Flash models are exhausted: STOP without switching to Lite,
  *   leaving Claude Code to handle natively.
  */
-export const FLASH_PERFORMANCE_MODELS = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'];
+export const FLASH_PERFORMANCE_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+];
 
 export const FLASH_FAILOVER_TARGETS: Record<string, string[]> = {
-  'gemini-3.7-flash': ['gemini-3.6-flash', 'gemini-3.5-flash'],
-  'gemini-3.6-flash': ['gemini-3.7-flash', 'gemini-3.5-flash'],
-  'gemini-3.5-flash': ['gemini-3.6-flash', 'gemini-3.7-flash'],
+  'gemini-3.8-flash': ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+  'gemini-3.7-flash': ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
+  'gemini-3.6-flash': ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'],
+  'gemini-3.5-flash': ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'],
 };
 
 export const FLASH_FAILOVER_CHAIN: Record<string, string | null> = {
-  'gemini-3.7-flash': 'gemini-3.6-flash',
-  'gemini-3.6-flash': 'gemini-3.7-flash',
-  'gemini-3.5-flash': 'gemini-3.6-flash',
+  'gemini-3.8-flash': 'gemini-3.7-flash',
+  'gemini-3.7-flash': 'gemini-3.8-flash',
+  'gemini-3.6-flash': 'gemini-3.8-flash',
+  'gemini-3.5-flash': 'gemini-3.8-flash',
 };
 
 const exhaustedFlashModels = new Set<string>();
@@ -714,11 +740,11 @@ export async function handleRateLimitDetected(
 
       return { action: 'switch', from: currentModel, to: nextModel };
     } else {
-      // All 3 Flash models (3.7, 3.6, 3.5) exhausted!
+      // All 4 Flash models (3.8, 3.7, 3.6, 3.5) exhausted!
       // Do NOT switch to Lite. Do NOT send task stop alerts.
       // Leave Claude Code 100% alone to follow its native retry and exit behavior.
       log.info(
-        '429 watchdog: All 3 Flash performance models (3.5, 3.6, 3.7) exhausted. Leaving Claude Code to handle retries/errors natively without interference.',
+        '429 watchdog: All 4 Flash performance models (3.5, 3.6, 3.7, 3.8) exhausted. Leaving Claude Code to handle retries/errors natively without interference.',
         { currentModel },
       );
 
