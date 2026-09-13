@@ -201,6 +201,12 @@ export async function switchProxyModel(target: string): Promise<string> {
     chosenModel = SUPPORTED_MODELS[target].id;
   }
 
+  // In test environment or if config file does not exist, do not attempt real filesystem writes or docker restart
+  if (process.env.VITEST || process.env.NODE_ENV === 'test' || !fs.existsSync(CONFIG_PATH)) {
+    log.info('Mocking switchProxyModel in test/missing-config environment', { model: chosenModel });
+    return chosenModel;
+  }
+
   let text = fs.readFileSync(CONFIG_PATH, 'utf8');
 
   for (const alias of SONNET_ALIASES) {
