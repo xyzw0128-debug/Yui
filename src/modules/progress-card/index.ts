@@ -15,6 +15,8 @@ interface ActiveProgressCard {
   threadId: string | null;
   instance?: string;
   messageId?: string;
+  isPosting: boolean;
+  messageIds: string[];
   startedAt: number;
   aggregator: ProgressAggregator;
   gate: ProgressEditGate;
@@ -111,6 +113,8 @@ export function startProgressCard(
     gate,
     fileOffset: 0,
     closed: false,
+    isPosting: false,
+    messageIds: [],
     timer: null as unknown as NodeJS.Timeout,
   };
 
@@ -127,15 +131,17 @@ export function startProgressCard(
       card.gate.markDirty();
     }
 
-    // 1. Post initial card after 1.5s or as soon as a tool is detected
-    if (!card.messageId) {
+    // 1. Post initial card after 1.5s or as soon as a tool is detected (single-flight lock)
+    if (!card.messageId && !card.isPosting) {
       const hasTools = card.aggregator.snapshot().tools.length > 0;
       const waitPassed = now - card.startedAt >= 1500;
       if (hasTools || waitPassed) {
+        card.isPosting = true;
         const text = renderProgressCard(card.aggregator.snapshot(now));
         const key = card.instance ?? card.channelType;
         postChannelMessage(key, card.platformId, card.threadId, text)
           .then((msgId) => {
+            card.isPosting = false;
             if (card.closed) {
               // Closed while post was in-flight, delete immediately
               if (msgId) {
@@ -145,10 +151,12 @@ export function startProgressCard(
             }
             if (msgId) {
               card.messageId = msgId;
+              card.messageIds.push(msgId);
               card.gate.recordEdit(Date.now());
             }
           })
           .catch((err) => {
+            card.isPosting = false;
             log.warn('Failed to post initial progress card', { sessionId, err });
           });
       }
@@ -156,6 +164,8 @@ export function startProgressCard(
     }
 
     // 2. Throttled edit (2s cadence)
+    if (!card.messageId) return;
+
     const delay = card.gate.scheduleDelay(now);
     if (delay === 0) {
       if (card.gate.beginEdit()) {
@@ -186,13 +196,18 @@ export async function finishProgressCard(sessionId: string): Promise<void> {
   clearInterval(card.timer);
   activeCards.delete(sessionId);
 
-  if (card.messageId) {
-    const key = card.instance ?? card.channelType;
+  const key = card.instance ?? card.channelType;
+  const toDelete = [...card.messageIds];
+  if (card.messageId && !toDelete.includes(card.messageId)) {
+    toDelete.push(card.messageId);
+  }
+
+  for (const msgId of toDelete) {
     try {
-      await deleteChannelMessage(key, card.platformId, card.threadId, card.messageId);
-      log.info('Progress card cleaned up after final delivery', { sessionId, messageId: card.messageId });
+      await deleteChannelMessage(key, card.platformId, card.threadId, msgId);
+      log.info('Progress card cleaned up after final delivery', { sessionId, messageId: msgId });
     } catch (err) {
-      log.debug('Failed to delete progress card on completion (non-fatal)', { sessionId, err });
+      log.debug('Failed to delete progress card on completion (non-fatal)', { sessionId, messageId: msgId, err });
     }
   }
 }
