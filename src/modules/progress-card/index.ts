@@ -101,6 +101,16 @@ export function startProgressCard(
   const aggregator = new ProgressAggregator(startedAt);
   const gate = new ProgressEditGate(2000);
 
+  const initialFilePath = findTranscriptFile(agentGroupId);
+  let initialOffset = 0;
+  if (initialFilePath && fs.existsSync(initialFilePath)) {
+    try {
+      initialOffset = fs.statSync(initialFilePath).size;
+    } catch {
+      initialOffset = 0;
+    }
+  }
+
   const card: ActiveProgressCard = {
     agentGroupId,
     sessionId,
@@ -111,7 +121,8 @@ export function startProgressCard(
     startedAt,
     aggregator,
     gate,
-    fileOffset: 0,
+    currentFilePath: initialFilePath ?? undefined,
+    fileOffset: initialOffset,
     closed: false,
     isPosting: false,
     messageIds: [],

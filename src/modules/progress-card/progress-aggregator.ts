@@ -51,6 +51,13 @@ export class ProgressAggregator {
 
     const type = row.type as string;
 
+    if (typeof row.timestamp === 'string') {
+      const lineTime = new Date(row.timestamp).getTime();
+      if (!isNaN(lineTime) && lineTime < this.startedAt - 2000) {
+        return; // Ignore events from past turns
+      }
+    }
+
     if (type === 'assistant') {
       const msg = (row.message as Record<string, unknown>) || {};
       if (typeof msg.model === 'string') {
