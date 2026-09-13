@@ -110,7 +110,7 @@ export async function probeAllKeys(): Promise<{ healthy: number; total: number; 
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ contents: [{ parts: [{ text: 'p' }] }] }),
-              signal: AbortSignal.timeout(2500),
+              signal: AbortSignal.timeout(4000),
             },
           );
           return res.status === 200 ? 1 : 0;
