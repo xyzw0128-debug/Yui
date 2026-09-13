@@ -23,7 +23,8 @@ export interface ModelOption {
   id: string;
   name: string;
   badge: string;
-  quota: string;
+  quotaPerKey: number;
+  rpmPerKey: number;
 }
 
 export const SUPPORTED_MODELS: Record<string, ModelOption> = {
@@ -32,37 +33,49 @@ export const SUPPORTED_MODELS: Record<string, ModelOption> = {
     id: 'gemini-3.1-flash-lite',
     name: '3.1 Flash-Lite',
     badge: '⚡ 초경량/초고속',
-    quota: '일 ~7,000회 (500회/키, 15 RPM)',
+    quotaPerKey: 500,
+    rpmPerKey: 15,
   },
   '3.5-flash-lite': {
     key: '3.5-flash-lite',
     id: 'gemini-3.5-flash-lite',
     name: '3.5 Flash-Lite',
     badge: '🛡️ 일상 추천/안전',
-    quota: '일 ~7,000회 (500회/키, 15 RPM)',
+    quotaPerKey: 500,
+    rpmPerKey: 15,
   },
   '3.5-flash': {
     key: '3.5-flash',
     id: 'gemini-3.5-flash',
     name: '3.5 Flash',
     badge: '🚀 표준 고성능',
-    quota: '일 280회 (20회/키, 5 RPM)',
+    quotaPerKey: 20,
+    rpmPerKey: 5,
   },
   '3.6-flash': {
     key: '3.6-flash',
     id: 'gemini-3.6-flash',
     name: '3.6 Flash',
     badge: '🚀 최신 고성능',
-    quota: '일 280회 (20회/키, 5 RPM)',
+    quotaPerKey: 20,
+    rpmPerKey: 5,
   },
   '3.7-flash': {
     key: '3.7-flash',
     id: 'gemini-3.7-flash',
     name: '3.7 Flash',
     badge: '🧠 심층 추론(Thinking)',
-    quota: '일 280회 (20회/키, 5 RPM)',
+    quotaPerKey: 20,
+    rpmPerKey: 5,
   },
 };
+
+export function formatModelQuota(model: ModelOption, keyCount: number): string {
+  const count = Math.max(1, keyCount);
+  const totalRpd = (model.quotaPerKey * count).toLocaleString();
+  const prefix = model.quotaPerKey >= 500 ? '~' : '';
+  return `일 ${prefix}${totalRpd}회 (${model.quotaPerKey}회/키, ${model.rpmPerKey} RPM)`;
+}
 
 export interface ModelStatus {
   activeModel: string;
@@ -230,10 +243,14 @@ export function buildModelConsolePayload(
   const isThinking = status.activeModel.includes('3.7');
   const color = !status.httpOk ? 0xe74c3c : isLite ? 0x2ecc71 : isThinking ? 0x9b59b6 : 0xf39c12;
 
+  const count = Math.max(1, status.keyCount || 1);
+  const liteTotalStr = (500 * count).toLocaleString();
+  const flashTotalStr = (20 * count).toLocaleString();
+
   let activeModelBadge = '알 수 없음';
   for (const model of Object.values(SUPPORTED_MODELS)) {
     if (status.activeModel === model.id) {
-      activeModelBadge = `${model.badge} • ${model.quota}`;
+      activeModelBadge = `${model.badge} • ${formatModelQuota(model, count)}`;
       break;
     }
   }
@@ -255,13 +272,13 @@ export function buildModelConsolePayload(
       inline: false,
     },
     {
-      name: '📋 선택 가능한 5개 모델 안내 (14개 키 풀 기준)',
+      name: `📋 선택 가능한 5개 모델 안내 (${count}개 키 풀 기준)`,
       value:
-        '• `gemini-3.1-flash-lite`: ⚡ 초경량 / 초고속 • **일 7,000회** (500회/키, 15 RPM)\n' +
-        '• `gemini-3.5-flash-lite`: 🛡️ 1M 컨텍스트 / 비전 • **일상 추천 (일 7,000회)** ⭐\n' +
-        '• `gemini-3.5-flash`: 🚀 표준 고성능 플래시 • 일 280회 (20회/키, 5 RPM)\n' +
-        '• `gemini-3.6-flash`: 🚀 차세대 고성능 플래시 • 일 280회 (20회/키, 5 RPM)\n' +
-        '• `gemini-3.7-flash`: 🧠 심층 추론(Thinking) • 일 280회 (코딩·논리 특화)',
+        `• \`gemini-3.1-flash-lite\`: ⚡ 초경량 / 초고속 • **일 ~${liteTotalStr}회** (500회/키, 15 RPM)\n` +
+        `• \`gemini-3.5-flash-lite\`: 🛡️ 1M 컨텍스트 / 비전 • **일상 추천 (일 ~${liteTotalStr}회)** ⭐\n` +
+        `• \`gemini-3.5-flash\`: 🚀 표준 고성능 플래시 • 일 ${flashTotalStr}회 (20회/키, 5 RPM)\n` +
+        `• \`gemini-3.6-flash\`: 🚀 차세대 고성능 플래시 • 일 ${flashTotalStr}회 (20회/키, 5 RPM)\n` +
+        `• \`gemini-3.7-flash\`: 🧠 심층 추론(Thinking) • 일 ${flashTotalStr}회 (코딩·논리 특화)`,
       inline: false,
     },
   ];
@@ -461,21 +478,26 @@ export async function handleModelButtonInteraction(
     // 2. Perform requested action
     let actionMessage = '';
     try {
+      const currentStatus = await getModelStatus();
+      const count = Math.max(1, currentStatus.keyCount || 1);
+      const liteTotalStr = (500 * count).toLocaleString();
+      const flashTotalStr = (20 * count).toLocaleString();
+
       if (customId === 'model:3.1-flash-lite') {
         const model = await switchProxyModel('3.1-flash-lite');
-        actionMessage = `⚡ **${model}**(초경량/초고속 모드)로 전환되었습니다!`;
+        actionMessage = `⚡ **${model}**(초경량/초고속 모드)로 전환되었습니다!\n(일 ~${liteTotalStr}회 풀, 15 RPM)`;
       } else if (customId === 'model:flash-lite' || customId === 'model:3.5-flash-lite') {
         const model = await switchProxyModel('3.5-flash-lite');
-        actionMessage = `🛡️ **${model}**(일상 추천/안전 모드)로 전환되었습니다! (일 ~7,000회 풀)`;
+        actionMessage = `🛡️ **${model}**(일상 추천/안전 모드)로 전환되었습니다!\n(일 ~${liteTotalStr}회 풀, 15 RPM)`;
       } else if (customId === 'model:flash' || customId === 'model:3.5-flash') {
         const model = await switchProxyModel('3.5-flash');
-        actionMessage = `🚀 **${model}**(표준 고성능 모드)로 전환되었습니다!\n(주의: 일 280회 초과 시 429 가능)`;
+        actionMessage = `🚀 **${model}**(표준 고성능 모드)로 전환되었습니다!\n(주의: 일 ${flashTotalStr}회 초과 시 429 가능, 5 RPM)`;
       } else if (customId === 'model:3.6-flash') {
         const model = await switchProxyModel('3.6-flash');
-        actionMessage = `🚀 **${model}**(차세대 고성능 모드)로 전환되었습니다!\n(주의: 일 280회 초과 시 429 가능)`;
+        actionMessage = `🚀 **${model}**(차세대 고성능 모드)로 전환되었습니다!\n(주의: 일 ${flashTotalStr}회 초과 시 429 가능, 5 RPM)`;
       } else if (customId === 'model:3.7-flash') {
         const model = await switchProxyModel('3.7-flash');
-        actionMessage = `🧠 **${model}**(심층 추론·Thinking 모드)로 전환되었습니다!\n(복잡한 코딩 및 아키텍처 추론 특화)`;
+        actionMessage = `🧠 **${model}**(심층 추론·Thinking 모드)로 전환되었습니다!\n(일 ${flashTotalStr}회 풀, 코딩·논리 특화, 5 RPM)`;
       } else if (customId === 'model:restart') {
         await restartProxyContainer();
         actionMessage = '🔄 Cliproxy API 컨테이너를 성공적으로 재시작했습니다.';

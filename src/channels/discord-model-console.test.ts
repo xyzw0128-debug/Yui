@@ -5,6 +5,8 @@ import {
   type ModelStatus,
   FLASH_FAILOVER_CHAIN,
   GIN_429_REGEX,
+  SUPPORTED_MODELS,
+  formatModelQuota,
   recordActiveDiscordChannel,
   getActiveDiscordChannel,
   handleRateLimitDetected,
@@ -218,6 +220,49 @@ describe('discord-model-console', () => {
       const result = await handleRateLimitDetected('gemini-3.5-flash-lite', true);
       expect(result.action).toBe('ignored');
       expect(result.from).toBe('gemini-3.5-flash-lite');
+    });
+  });
+
+  describe('Dynamic Key & Quota Scaling (No Hardcoded 14 Keys)', () => {
+    it('dynamically formats quota for any key count via formatModelQuota', () => {
+      const liteModel = SUPPORTED_MODELS['3.5-flash-lite'];
+      const flashModel = SUPPORTED_MODELS['3.7-flash'];
+
+      // 10 keys: 5,000 lite, 200 flash
+      expect(formatModelQuota(liteModel, 10)).toBe('일 ~5,000회 (500회/키, 15 RPM)');
+      expect(formatModelQuota(flashModel, 10)).toBe('일 200회 (20회/키, 5 RPM)');
+
+      // 20 keys: 10,000 lite, 400 flash
+      expect(formatModelQuota(liteModel, 20)).toBe('일 ~10,000회 (500회/키, 15 RPM)');
+      expect(formatModelQuota(flashModel, 20)).toBe('일 400회 (20회/키, 5 RPM)');
+
+      // 1 key: 500 lite, 20 flash
+      expect(formatModelQuota(liteModel, 1)).toBe('일 ~500회 (500회/키, 15 RPM)');
+      expect(formatModelQuota(flashModel, 1)).toBe('일 20회 (20회/키, 5 RPM)');
+    });
+
+    it('dynamically renders embed header and values according to keyCount in status', () => {
+      const status20: ModelStatus = {
+        activeModel: 'gemini-3.7-flash',
+        keyCount: 20,
+        dockerStatus: 'running',
+        httpOk: true,
+        pingMs: 30,
+      };
+
+      const payload20 = buildModelConsolePayload(status20);
+      const fields = payload20.embeds[0].fields as Array<{ name: string; value: string }>;
+
+      const guideField = fields.find((f) => f.name.includes('선택 가능한 5개 모델 안내'));
+      expect(guideField?.name).toContain('(20개 키 풀 기준)');
+      expect(guideField?.value).toContain('일 ~10,000회'); // 20 * 500
+      expect(guideField?.value).toContain('일 400회'); // 20 * 20
+
+      const keyField = fields.find((f) => f.name.includes('API Key 풀'));
+      expect(keyField?.value).toContain('20개 키 가동');
+
+      const activeField = fields.find((f) => f.name.includes('현재 활성 백엔드 모델'));
+      expect(activeField?.value).toContain('일 400회 (20회/키, 5 RPM)');
     });
   });
 });
