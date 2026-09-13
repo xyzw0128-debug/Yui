@@ -1,13 +1,20 @@
 import fs from 'fs';
+import path from 'path';
 import { exec, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { log } from '../log.js';
 
 const execAsync = promisify(exec);
 
-const CONFIG_PATH = '/home/lael/cliproxyapi/config.yaml';
+export function getCliproxyConfigPath(): string {
+  if (process.env.CLIPROXY_CONFIG_PATH) return process.env.CLIPROXY_CONFIG_PATH;
+  if (process.env.HOME) return path.join(process.env.HOME, 'cliproxyapi/config.yaml');
+  return '/home/lael/cliproxyapi/config.yaml';
+}
+
+export const CONFIG_PATH = getCliproxyConfigPath();
 const CLIPROXY_PING_URL = 'http://172.17.0.1:8317/v1/models';
-const OWNER_DISCORD_ID = '631432379889745930';
+const OWNER_DISCORD_ID = process.env.DISCORD_OWNER_ID || '';
 
 let isActionInProgress = false;
 
@@ -626,7 +633,7 @@ export function getNextFlashModel(currentModel: string): string | null {
 
 export const GIN_429_REGEX = /429\s*\|.*POST\s+"\/v1\/messages/;
 
-let activeDiscordChannelId = '1547919112523747328'; // Lael's DM channel default
+let activeDiscordChannelId = process.env.DISCORD_ACTIVE_CHANNEL_ID || '';
 let storedDiscordBotToken: string | null = null;
 let isFailoverInProgress = false;
 let lastFailoverAt = 0;
@@ -639,7 +646,7 @@ export function recordActiveDiscordChannel(channelId?: string): void {
 }
 
 export function getActiveDiscordChannel(): string {
-  return activeDiscordChannelId;
+  return activeDiscordChannelId || process.env.DISCORD_ACTIVE_CHANNEL_ID || '';
 }
 
 export function setDiscordBotToken(token?: string): void {

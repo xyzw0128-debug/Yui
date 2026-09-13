@@ -27,8 +27,9 @@ describe('discord-model-console', () => {
   });
 
   describe('isAuthorizedUser', () => {
-    it('authorizes the default owner ID (631432379889745930)', () => {
-      expect(isAuthorizedUser('631432379889745930')).toBe(true);
+    it('authorizes the owner ID configured via DISCORD_OWNER_ID', () => {
+      process.env.DISCORD_OWNER_ID = '999888777666555444';
+      expect(isAuthorizedUser('999888777666555444')).toBe(true);
     });
 
     it('rejects undefined or empty userId', () => {
@@ -225,22 +226,24 @@ describe('discord-model-console', () => {
   });
 
   describe('recordActiveDiscordChannel', () => {
-    it('defaults to the configured default channel ID', () => {
-      expect(getActiveDiscordChannel()).toBe('1547919112523747328');
+    it('returns empty or environment default channel ID when set', () => {
+      process.env.DISCORD_ACTIVE_CHANNEL_ID = '111222333444555666';
+      expect(getActiveDiscordChannel()).toBe('111222333444555666');
     });
 
     it('updates active channel when a valid channel ID is passed', () => {
       recordActiveDiscordChannel('999888777666555444');
       expect(getActiveDiscordChannel()).toBe('999888777666555444');
-      // Reset back to default for test isolation
-      recordActiveDiscordChannel('1547919112523747328');
+      // Reset back for test isolation
+      recordActiveDiscordChannel('111222333444555666');
     });
 
     it('ignores empty or short invalid channel IDs', () => {
+      recordActiveDiscordChannel('111222333444555666');
       recordActiveDiscordChannel('');
-      expect(getActiveDiscordChannel()).toBe('1547919112523747328');
+      expect(getActiveDiscordChannel()).toBe('111222333444555666');
       recordActiveDiscordChannel('123');
-      expect(getActiveDiscordChannel()).toBe('1547919112523747328');
+      expect(getActiveDiscordChannel()).toBe('111222333444555666');
     });
   });
 
