@@ -209,9 +209,19 @@ export async function switchProxyModel(target: string): Promise<string> {
 
   let text = fs.readFileSync(CONFIG_PATH, 'utf8');
 
+  let matchCount = 0;
   for (const alias of SONNET_ALIASES) {
     const regex = new RegExp(`- name: "[^"]+"\\s*\\n\\s*alias: "${alias}"`, 'g');
+    const before = text;
     text = text.replace(regex, `- name: "${chosenModel}"\n        alias: "${alias}"`);
+    if (text !== before) matchCount++;
+  }
+  if (matchCount === 0) {
+    log.warn('switchProxyModel: YAML regex matched no aliases — config format may have changed', {
+      model: chosenModel,
+      configPath: CONFIG_PATH,
+      aliases: SONNET_ALIASES,
+    });
   }
 
   fs.writeFileSync(CONFIG_PATH, text, 'utf8');
@@ -798,13 +808,9 @@ export function startModelFailoverWatchdog(botToken?: string): void {
 
       watchdogProcess = child;
 
-      let lineBuffer = '';
-
-      const processData = (chunk: Buffer) => {
-        lineBuffer += chunk.toString('utf8');
-        const lines = lineBuffer.split('\n');
-        lineBuffer = lines.pop() ?? '';
-
+      const processLines = (buf: string): string => {
+        const lines = buf.split('\n');
+        const remainder = lines.pop() ?? '';
         for (const line of lines) {
           if (GIN_429_REGEX.test(line)) {
             log.warn('429 watchdog detected 429 on /v1/messages in cliproxy log', { line: line.trim() });
@@ -812,10 +818,17 @@ export function startModelFailoverWatchdog(botToken?: string): void {
             break;
           }
         }
+        return remainder;
       };
 
-      child.stdout?.on('data', processData);
-      child.stderr?.on('data', processData);
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdoutBuffer = processLines(stdoutBuffer + chunk.toString('utf8'));
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderrBuffer = processLines(stderrBuffer + chunk.toString('utf8'));
+      });
 
       child.on('error', (err) => {
         log.warn('429 watchdog process error', { err });

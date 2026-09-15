@@ -1,8 +1,8 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index e1170c5a..84487707 100644
+index e1170c5a..dda012ef 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -39,6 +39,8 @@ jobs:
+@@ -39,9 +39,12 @@ jobs:
          run: pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit
  
        - name: Host tests
@@ -11,6 +11,10 @@ index e1170c5a..84487707 100644
          run: pnpm exec vitest run
  
        - name: Container tests
++        if: matrix.node-version == 24
+         working-directory: container/agent-runner
+         run: bun test
+ 
 diff --git a/src/channels/adapter.ts b/src/channels/adapter.ts
 index 5315c421..3aaee452 100644
 --- a/src/channels/adapter.ts
@@ -25,6 +29,242 @@ index 5315c421..3aaee452 100644
    setTyping?(
      platformId: string,
      threadId: string | null,
+diff --git a/src/channels/chat-sdk-bridge.ts b/src/channels/chat-sdk-bridge.ts
+index a6c08fdd..15be7668 100644
+--- a/src/channels/chat-sdk-bridge.ts
++++ b/src/channels/chat-sdk-bridge.ts
+@@ -27,6 +27,14 @@ import { normalizeOptions, type NormalizedOption } from './ask-question.js';
+ import type { ChannelAdapter, ChannelDefaults, ChannelSetup, InboundMessage } from './adapter.js';
+ import { INSTANCE_KEY_RE } from './channel-registry.js';
+ import { resolveQuestionRender } from './question-render-registry.js';
++import {
++  handleModelSlashCommand,
++  handleModelButtonInteraction,
++  handleModelTextMessage,
++  recordActiveDiscordChannel,
++  startModelFailoverWatchdog,
++  stopModelFailoverWatchdog,
++} from './discord-model-console.js';
+ 
+ /** Adapter with optional gateway support (e.g., Discord). */
+ interface GatewayAdapter extends Adapter {
+@@ -387,7 +395,8 @@ function resolveSelectedOption(
+   eventValue: string | undefined,
+   tail: string | undefined,
+ ): string {
+-  const candidate = eventValue ?? tail ?? '';
++  const raw = eventValue ?? tail ?? '';
++  const candidate = raw.split('\n')[0].trim();
+   if (render && /^\d+$/.test(candidate)) {
+     const idx = Number(candidate);
+     if (render.options[idx]) return render.options[idx].value;
+@@ -489,11 +498,13 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
+       const enriched = [];
+       for (const att of message.attachments) {
+         // eslint-disable-next-line @typescript-eslint/no-explicit-any
++        const rawAtt = att as Record<string, any>;
+         const entry: Record<string, any> = {
+           type: att.type,
+           name: att.name,
+           mimeType: att.mimeType,
+           size: att.size,
++          url: rawAtt.url,
+           width: (att as unknown as Record<string, unknown>).width,
+           height: (att as unknown as Record<string, unknown>).height,
+         };
+@@ -504,6 +515,29 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
+           } catch (err) {
+             log.warn('Failed to download attachment', { type: att.type, err });
+           }
++        } else if (rawAtt.url && typeof rawAtt.url === 'string') {
++          const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MB
++          try {
++            const res = await fetch(rawAtt.url, { signal: AbortSignal.timeout(15_000) });
++            if (res.ok) {
++              const contentLength = Number(res.headers.get('content-length') ?? 0);
++              if (contentLength > MAX_ATTACHMENT_BYTES) {
++                log.warn('Attachment too large, skipping download', { url: rawAtt.url, contentLength });
++              } else {
++                const ab = await res.arrayBuffer();
++                if (ab.byteLength > MAX_ATTACHMENT_BYTES) {
++                  log.warn('Downloaded attachment exceeds size limit', { url: rawAtt.url, size: ab.byteLength });
++                } else {
++                  entry.data = Buffer.from(ab).toString('base64');
++                  log.info('Downloaded attachment via URL', { name: att.name, size: ab.byteLength });
++                }
++              }
++            } else {
++              log.warn('Failed to download attachment via URL', { url: rawAtt.url, status: res.status });
++            }
++          } catch (err) {
++            log.warn('Error fetching attachment via URL', { url: rawAtt.url, err });
++          }
+         }
+         enriched.push(entry);
+       }
+@@ -678,7 +712,8 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
+       // Handle button clicks (ask_user_question)
+       chat.onAction(async (event) => {
+         if (!event.actionId.startsWith('ncq:')) return;
+-        const parts = event.actionId.split(':');
++        const cleanActionId = event.actionId.split('\n')[0];
++        const parts = cleanActionId.split(':');
+         if (parts.length < 3) return;
+         const questionId = parts[1];
+         const tail = parts.slice(2).join(':');
+@@ -729,6 +764,9 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
+         // Start local HTTP server to receive forwarded Gateway events (including interactions)
+         const webhookUrl = await startLocalWebhookServer(gatewayAdapter, setupConfig, config.botToken);
+ 
++        // Start 429 smart failover watchdog
++        startModelFailoverWatchdog(config.botToken);
++
+         // Exponential backoff capped at 1h. Without this, an unrecoverable
+         // failure (e.g., TokenInvalid) restarts ~10×/sec and Discord's
+         // Cloudflare layer issues a multi-hour IP block. A run that lasts
+@@ -961,12 +999,37 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
+       }
+     },
+ 
++    async postMessage(platformId: string, threadId: string | null, text: string): Promise<string | undefined> {
++      const tid = threadId ?? platformId;
++      const result = await adapter.postMessage(tid, { markdown: text });
++      return result?.id;
++    },
++
++    async editMessage(platformId: string, threadId: string | null, messageId: string, text: string): Promise<void> {
++      const tid = threadId ?? platformId;
++      await adapter.editMessage(tid, messageId, { markdown: text });
++    },
++
++    async deleteMessage(platformId: string, threadId: string | null, messageId: string): Promise<void> {
++      const tid = threadId ?? platformId;
++      if (
++        typeof (adapter as unknown as { deleteMessage?: (tid: string, mid: string) => Promise<void> }).deleteMessage ===
++        'function'
++      ) {
++        await (adapter as unknown as { deleteMessage: (tid: string, mid: string) => Promise<void> }).deleteMessage(
++          tid,
++          messageId,
++        );
++      }
++    },
++
+     async setTyping(platformId: string, threadId: string | null) {
+       const tid = threadId ?? platformId;
+       await adapter.startTyping(tid);
+     },
+ 
+     async teardown() {
++      stopModelFailoverWatchdog();
+       gatewayAbort?.abort();
+       await chat.shutdown();
+       log.info('Chat SDK bridge shut down', { adapter: adapter.name });
+@@ -1045,7 +1108,7 @@ function startLocalWebhookServer(
+   });
+ }
+ 
+-async function handleForwardedEvent(
++export async function handleForwardedEvent(
+   body: string,
+   adapter: GatewayAdapter,
+   setupConfig: ChannelSetup,
+@@ -1058,12 +1121,45 @@ async function handleForwardedEvent(
+     return;
+   }
+ 
+-  // Handle interaction events (button clicks) — not handled by adapter's handleForwardedGatewayEvent
++  // Handle interaction events (button clicks & slash commands) — not handled by adapter's handleForwardedGatewayEvent
+   if (event.type === 'GATEWAY_INTERACTION_CREATE' && event.data) {
+     const interaction = event.data;
++    if (interaction.channel_id) {
++      recordActiveDiscordChannel(interaction.channel_id as string);
++    }
++
++    // type 2 = Slash Command (Application Command)
++    if (interaction.type === 2) {
++      const data = interaction.data as Record<string, unknown>;
++      if (data?.name === 'model') {
++        const user =
++          ((interaction.member as Record<string, unknown>)?.user as Record<string, string> | undefined) ??
++          (interaction.user as Record<string, string> | undefined);
++        const requesterName = user?.global_name || user?.username;
++        try {
++          await handleModelSlashCommand(interaction, requesterName);
++        } catch (err) {
++          log.error('Failed to handle /model slash command', { err });
++        }
++        return;
++      }
++    }
++
+     // type 3 = MessageComponent (button/select)
+     if (interaction.type === 3) {
+       const customId = (interaction.data as Record<string, unknown>)?.custom_id as string;
++
++      // Model Console interactive buttons
++      if (customId?.startsWith('model:')) {
++        const appId = (interaction.application_id as string) || process.env.DISCORD_APPLICATION_ID || '';
++        try {
++          await handleModelButtonInteraction(interaction, appId);
++        } catch (err) {
++          log.error('Failed to handle model console button click', { customId, err });
++        }
++        return;
++      }
++
+       // In guilds the clicker is at interaction.member.user; in DMs it's interaction.user directly.
+       const user =
+         ((interaction.member as Record<string, unknown>)?.user as Record<string, string> | undefined) ??
+@@ -1075,10 +1171,11 @@ async function handleForwardedEvent(
+       let questionId: string | undefined;
+       let tail: string | undefined;
+       if (customId?.startsWith('ncq:')) {
+-        const colonIdx = customId.indexOf(':', 4); // after "ncq:"
++        const cleanCustomId = customId.split('\n')[0];
++        const colonIdx = cleanCustomId.indexOf(':', 4); // after "ncq:"
+         if (colonIdx !== -1) {
+-          questionId = customId.slice(4, colonIdx);
+-          tail = customId.slice(colonIdx + 1);
++          questionId = cleanCustomId.slice(4, colonIdx);
++          tail = cleanCustomId.slice(colonIdx + 1);
+         }
+       }
+ 
+@@ -1125,6 +1222,33 @@ async function handleForwardedEvent(
+     }
+   }
+ 
++  // Handle plain text commands (!model, !모델)
++  if (event.type === 'GATEWAY_MESSAGE_CREATE' && event.data) {
++    const messageData = event.data;
++    if (messageData.channel_id) {
++      recordActiveDiscordChannel(messageData.channel_id as string);
++    }
++    const author = messageData.author as Record<string, unknown> | undefined;
++    if (!author?.bot) {
++      const rawContent = ((messageData.content as string) || '').trim();
++      const content = rawContent.toLowerCase();
++      const stripped = content.replace(/<@!?[0-9]+>/g, '').trim();
++      if (content === '!model' || content === '!모델' || stripped === '!model' || stripped === '!모델') {
++        const token = botToken || process.env.DISCORD_BOT_TOKEN;
++        if (token && messageData.channel_id) {
++          const authorRecord = author as Record<string, string> | undefined;
++          const requesterName = authorRecord?.global_name || authorRecord?.username;
++          try {
++            await handleModelTextMessage(messageData.channel_id as string, token, requesterName);
++          } catch (err) {
++            log.error('Failed to handle !model text command', { err });
++          }
++          return; // Early return to avoid forwarding to LLM agent
++        }
++      }
++    }
++  }
++
+   // Forward other events to the adapter's webhook handler for normal processing
+   const fakeRequest = new Request('http://localhost/webhook', {
+     method: 'POST',
 diff --git a/src/channels/discord.ts b/src/channels/discord.ts
 new file mode 100644
 index 00000000..f2bb09ec
