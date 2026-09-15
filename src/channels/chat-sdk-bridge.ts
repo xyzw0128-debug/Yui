@@ -516,12 +516,22 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
             log.warn('Failed to download attachment', { type: att.type, err });
           }
         } else if (rawAtt.url && typeof rawAtt.url === 'string') {
+          const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MB
           try {
-            const res = await fetch(rawAtt.url);
+            const res = await fetch(rawAtt.url, { signal: AbortSignal.timeout(15_000) });
             if (res.ok) {
-              const ab = await res.arrayBuffer();
-              entry.data = Buffer.from(ab).toString('base64');
-              log.info('Downloaded attachment via URL', { name: att.name, size: ab.byteLength });
+              const contentLength = Number(res.headers.get('content-length') ?? 0);
+              if (contentLength > MAX_ATTACHMENT_BYTES) {
+                log.warn('Attachment too large, skipping download', { url: rawAtt.url, contentLength });
+              } else {
+                const ab = await res.arrayBuffer();
+                if (ab.byteLength > MAX_ATTACHMENT_BYTES) {
+                  log.warn('Downloaded attachment exceeds size limit', { url: rawAtt.url, size: ab.byteLength });
+                } else {
+                  entry.data = Buffer.from(ab).toString('base64');
+                  log.info('Downloaded attachment via URL', { name: att.name, size: ab.byteLength });
+                }
+              }
             } else {
               log.warn('Failed to download attachment via URL', { url: rawAtt.url, status: res.status });
             }

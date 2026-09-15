@@ -44,6 +44,7 @@ jobs:
         run: pnpm exec vitest run
 
       - name: Container tests
+        if: matrix.node-version == 24
         working-directory: container/agent-runner
         run: bun test
 

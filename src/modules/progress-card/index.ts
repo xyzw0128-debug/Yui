@@ -64,9 +64,12 @@ function readNewTranscriptLines(card: ActiveProgressCard): void {
     fs.readSync(fd, buffer, 0, bytesToRead, card.fileOffset);
     fs.closeSync(fd);
 
-    card.fileOffset = stat.size;
     const text = buffer.toString('utf-8');
-    const lines = text.split('\n');
+    const lastNewline = text.lastIndexOf('\n');
+    if (lastNewline === -1) return; // No complete line yet — wait for next tick
+    const completeText = text.substring(0, lastNewline + 1);
+    card.fileOffset += Buffer.byteLength(completeText, 'utf-8');
+    const lines = completeText.split('\n');
 
     for (const line of lines) {
       const trimmed = line.trim();
