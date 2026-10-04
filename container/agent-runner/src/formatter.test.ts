@@ -154,28 +154,6 @@ describe('structured chat links', () => {
   });
 });
 
-describe('study context', () => {
-  it('renders study_context in its own block without altering the user text', () => {
-    insertMessage('m1', 'chat-sdk', {
-      sender: 'Lael',
-      text: 'B+ 트리 분할이 뭐야?',
-      study_context: '📄 DB_교재.md > B+ 트리\n"노드가 가득 차면 <중간 키>를 올린다"',
-    });
-
-    const result = formatMessages(getPendingMessages());
-
-    expect(result).toContain('>B+ 트리 분할이 뭐야?\n<study-context>\n');
-    expect(result).toContain('&lt;중간 키&gt;');
-    expect(result).toContain('</study-context></message>');
-  });
-
-  it('renders nothing when study_context is absent', () => {
-    insertMessage('m1', 'chat-sdk', { sender: 'Lael', text: '답장 왔어?' });
-
-    expect(formatMessages(getPendingMessages())).not.toContain('study-context');
-  });
-});
-
 describe('timestamp formatting', () => {
   it('renders time via formatLocalTime (user TZ)', () => {
     // 2026-06-15T12:00:00Z — timezone-agnostic assertions (year is stable)

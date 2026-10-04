@@ -205,27 +205,6 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 | `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials |
 | `/migrate-memory` | Carry a group's agent memory across a provider switch (operator-run, both directions) |
 
-## Study RAG (강의자료 자동 검색)
-
-`src/modules/study-rag/` — 대학 강의 자료(`.md` 파일)를 자동 인덱싱하고, 학습 관련 메시지에 관련 자료를 RAG 방식으로 주입하는 모듈.
-
-**환경변수:** `STUDY_VAULT_PATH` — 강의자료 루트 경로 (기본값: `/home/lael/University/2학년 2학기`). 각 하위 디렉터리가 하나의 과목으로 취급됨. `STUDY_RAG_THRESHOLD` — 주입 유사도 하한 (기본 0.7). `GEMINI_API_KEY` — cliproxy 설정에 키가 없을 때의 폴백.
-
-**동작 흐름:**
-1. 시작 시 `initStudyRag()`가 vault 내 `.md` 파일을 스캔, MD5 해시로 변경 감지 후 새/변경 파일만 청킹 + Gemini 임베딩(`RETRIEVAL_DOCUMENT`) 생성 → SQLite 저장. 임베딩 방식(`EMBEDDING_VERSION`)이 바뀌면 전체 재인덱싱
-2. 라우터가 engage + command gate를 통과한 메시지에 대해서만 `attachStudyContext()`를 호출 — 쿼리 임베딩(`RETRIEVAL_QUERY`) 후 임계값 이상인 상위 5개 청크를 `content.study_context`에 담음. 사용자 `text`는 절대 수정하지 않음 (`/`·`!` 명령은 건너뜀). 컨테이너 formatter가 `<study-context>` 블록으로 렌더링
-3. 임계값 미달 시 `Study RAG: no match above threshold` 로그에 best 점수가 남음 — 임계값 튜닝용
-4. on/off 토글은 `study_meta` 테이블에 저장되어 재시작 후에도 유지
-5. 삭제된 파일의 청크는 다음 인덱싱 시 자동 정리
-
-**Discord 커맨드:**
-- `/study action:on` / `/study action:off` / `/study action:status` — 슬래시 커맨드
-- `!study on` / `!study off` / `!학습 켜기` / `!학습 끄기` — 텍스트 커맨드 (동일 동작)
-
-**임베딩:** Gemini `gemini-embedding-001` 모델 사용, `cliproxyapi/config.yaml`의 멀티키 풀에서 round-robin + 429 자동 페일오버.
-
-**주요 파일:** `types.ts` (타입), `chunker.ts` (Markdown 청킹), `embedder.ts` (임베딩 API), `vector-store.ts` (SQLite 벡터 저장소), `retriever.ts` (검색), `generator.ts` (컨텍스트 포매팅), `index.ts` (엔트리포인트).
-
 ## Contributing
 
 Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, `SKILL.md` format rules, and the pre-submission checklist.
