@@ -1336,6 +1336,7 @@ export async function handleForwardedEvent(
         if (token && messageData.channel_id) {
           const authorRecord = author as Record<string, string> | undefined;
           const requesterName = authorRecord?.global_name || authorRecord?.username;
+          const authorized = isAuthorizedUser(authorRecord?.id);
           try {
             const arg = isModelWithArg ? stripped.split(/\s+/)[1]?.toLowerCase() : undefined;
             const switchesModel =
@@ -1346,7 +1347,7 @@ export async function handleForwardedEvent(
               arg === 'flash' ||
               arg === 'fast' ||
               arg === 'off';
-            if (switchesModel && !isAuthorizedUser(authorRecord?.id)) {
+            if (switchesModel && !authorized) {
               await fetch(`https://discord.com/api/v10/channels/${messageData.channel_id}/messages`, {
                 method: 'POST',
                 headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
@@ -1360,6 +1361,7 @@ export async function handleForwardedEvent(
                   token,
                   requesterName,
                   '🚀 **gemini-pro-agent**(Pro Agent / Boost 모드)로 전환되었습니다!\n(심층 추론 및 고난도 코딩 작업에 최적화, 1M 컨텍스트)',
+                  true,
                 );
               } else if (arg === 'flash' || arg === 'fast' || arg === 'off') {
                 await switchProxyModel('gemini-3-flash');
@@ -1368,12 +1370,25 @@ export async function handleForwardedEvent(
                   token,
                   requesterName,
                   '⚡ **gemini-3-flash**(초고속 Flash 모드)로 전환되었습니다!\n(빠른 응답 속도 및 일상 작업에 최적화, 1M 컨텍스트)',
+                  true,
                 );
               } else {
-                await handleModelTextMessage(messageData.channel_id as string, token, requesterName);
+                await handleModelTextMessage(
+                  messageData.channel_id as string,
+                  token,
+                  requesterName,
+                  undefined,
+                  authorized,
+                );
               }
             } else {
-              await handleModelTextMessage(messageData.channel_id as string, token, requesterName);
+              await handleModelTextMessage(
+                messageData.channel_id as string,
+                token,
+                requesterName,
+                undefined,
+                authorized,
+              );
             }
           } catch (err) {
             log.error('Failed to handle !model/!boost text command', { err });

@@ -31,7 +31,8 @@ import { findSessionForAgent } from './db/sessions.js';
 import { backfillNewSession, fanInboundMessage } from './modules/cross-session-context/index.js';
 import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
 import { startProgressCard, stopProgressCard } from './modules/progress-card/index.js';
-import { attachStudyContext } from './modules/study-rag/index.js';
+import { attachStudyContext, isStudyRagActive, isStudyRagEnabled } from './modules/study-rag/index.js';
+import { hasAdminPrivilege } from './modules/permissions/db/user-roles.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
 import { requestWake } from './request-wake.js';
@@ -590,10 +591,18 @@ async function deliverToAgent(
   // Study RAG: only engaged chat messages that passed the command gate get
   // a lookup, and the result rides along as content.study_context — the
   // user's text is never rewritten. Sibling echoes below keep the original.
-  const content =
-    wake && (event.message.kind === 'chat' || event.message.kind === 'chat-sdk')
-      ? await attachStudyContext(event.message.id, event.message.content)
-      : event.message.content;
+  // Course material is private, so only owners/admins (user_roles, same as
+  // the command gate) get it; other senders in a shared channel never see it.
+  const studyEligible =
+    wake &&
+    (event.message.kind === 'chat' || event.message.kind === 'chat-sdk') &&
+    userId !== null &&
+    isStudyRagActive() &&
+    isStudyRagEnabled() &&
+    (await hasAdminPrivilege(userId, agent.agent_group_id));
+  const content = studyEligible
+    ? await attachStudyContext(event.message.id, event.message.content)
+    : event.message.content;
 
   const messageId = messageIdForAgent(event.message.id, agent.agent_group_id);
   await writeSessionMessage(session.agent_group_id, session.id, {

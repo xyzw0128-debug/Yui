@@ -80,7 +80,7 @@ describe('discord-model-console (Antigravity Edition)', () => {
     it('builds a purple payload when gemini-pro-agent (Boost) is active and healthy', () => {
       const status: ModelStatus = {
         activeModel: 'gemini-pro-agent',
-        oauthAccount: 'xyzw0128@gmail.com',
+        oauthAccount: 'owner@example.com',
         keyCount: 1,
         dockerStatus: 'running',
         httpOk: true,
@@ -117,7 +117,7 @@ describe('discord-model-console (Antigravity Edition)', () => {
     it('builds a blue payload when gemini-3-flash is active', () => {
       const status: ModelStatus = {
         activeModel: 'gemini-3-flash',
-        oauthAccount: 'xyzw0128@gmail.com',
+        oauthAccount: 'owner@example.com',
         keyCount: 1,
         dockerStatus: 'running',
         httpOk: true,
@@ -136,7 +136,7 @@ describe('discord-model-console (Antigravity Edition)', () => {
     it('builds a red payload when httpOk is false', () => {
       const status: ModelStatus = {
         activeModel: 'gemini-pro-agent',
-        oauthAccount: 'xyzw0128@gmail.com',
+        oauthAccount: 'owner@example.com',
         keyCount: 1,
         dockerStatus: 'stopped',
         httpOk: false,
@@ -150,7 +150,7 @@ describe('discord-model-console (Antigravity Edition)', () => {
     it('omits redundant fields (guide, action message, duplicate oauth)', () => {
       const status: ModelStatus = {
         activeModel: 'gemini-pro-agent',
-        oauthAccount: 'xyzw0128@gmail.com',
+        oauthAccount: 'owner@example.com',
         keyCount: 1,
         dockerStatus: 'running',
         httpOk: true,
@@ -316,14 +316,14 @@ describe('discord-model-console (Antigravity Edition)', () => {
     it('renders Antigravity quota field in buildModelConsolePayload when present', () => {
       const status: ModelStatus = {
         activeModel: 'gemini-3-flash',
-        oauthAccount: 'xyzw0128@gmail.com',
+        oauthAccount: 'owner@example.com',
         keyCount: 1,
         dockerStatus: 'running',
         httpOk: true,
         pingMs: 30,
         quotaInfo: {
-          userName: '장성원',
-          userEmail: 'xyzw0128@gmail.com',
+          userName: '홍길동',
+          userEmail: 'owner@example.com',
           planName: 'Pro',
           proRemainingFraction: 0.62,
           proResetTime: new Date(Date.now() + 7200000).toISOString(),
@@ -333,15 +333,24 @@ describe('discord-model-console (Antigravity Edition)', () => {
         },
       };
 
-      const payload = buildModelConsolePayload(status);
+      const payload = buildModelConsolePayload(status, undefined, true);
       const fields = payload.embeds[0].fields as Array<{ name: string; value: string }>;
       const quotaField = fields.find((f) => f.name.includes('토큰 & 쿼터 현황'));
       expect(quotaField).toBeDefined();
-      expect(quotaField?.value).toContain('장성원');
+      expect(quotaField?.value).toContain('홍길동');
+      expect(quotaField?.value).toContain('owner@example.com');
       expect(quotaField?.value).toContain('Pro 플랜');
       expect(quotaField?.value).toContain('Gemini 잔여 쿼터 (Pro / Flash 공용)');
       expect(quotaField?.value).toContain('62%');
       expect(quotaField?.value).toContain('쿼터 리셋 예정');
+
+      // Default (non-admin viewer): quota stays, the account identity does not.
+      const publicFields = buildModelConsolePayload(status).embeds[0].fields as Array<{ name: string; value: string }>;
+      const publicQuota = publicFields.find((f) => f.name.includes('토큰 & 쿼터 현황'));
+      expect(publicQuota?.value).toContain('62%');
+      expect(publicQuota?.value).toContain('Pro 플랜');
+      expect(publicQuota?.value).not.toContain('홍길동');
+      expect(publicQuota?.value).not.toContain('owner@example.com');
     });
   });
 });

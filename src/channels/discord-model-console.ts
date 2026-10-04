@@ -363,7 +363,7 @@ export async function replyEphemeral(interaction: Record<string, unknown>, conte
 
 export async function probeAntigravity(): Promise<{ healthy: boolean; latencyMs: number; account: string }> {
   const t0 = Date.now();
-  let account = 'xyzw0128@gmail.com';
+  let account = 'unknown';
   try {
     const authDir = path.resolve(path.dirname(CONFIG_PATH), 'auth');
     if (fs.existsSync(authDir)) {
@@ -402,7 +402,7 @@ export async function probeAllKeys(): Promise<{ healthy: number; total: number; 
 export async function getModelStatus(actionMessage?: string, forceRefresh = false): Promise<ModelStatus> {
   let activeModel = 'unknown';
   let keyCount = 0;
-  let oauthAccount = 'xyzw0128@gmail.com';
+  let oauthAccount = 'unknown';
 
   try {
     if (fs.existsSync(CONFIG_PATH)) {
@@ -540,6 +540,8 @@ export async function restartProxyContainer(): Promise<void> {
 export function buildModelConsolePayload(
   status: ModelStatus,
   requesterName?: string,
+  /** Include the OAuth account name/email. Only for owner/admin viewers — the embed is posted publicly. */
+  showAccount = false,
 ): {
   embeds: Array<Record<string, unknown>>;
   components: Array<Record<string, unknown>>;
@@ -577,14 +579,17 @@ export function buildModelConsolePayload(
     const quotaBar = formatQuotaBar(quotaFraction);
     const resetCountdown = formatResetCountdown(q.proResetTime || q.flashResetTime);
     const planText = q.planName ? ` • **${q.planName} 플랜**` : '';
-    const userText = q.userName
-      ? `👤 **${q.userName}** (\`${q.userEmail || status.oauthAccount || 'xyzw0128@gmail.com'}\`)${planText}`
-      : `👤 \`${status.oauthAccount || 'xyzw0128@gmail.com'}\`${planText}`;
+    const account = q.userEmail || status.oauthAccount || 'unknown';
+    const userText = !showAccount
+      ? planText.replace(/^ • /, '')
+      : q.userName
+        ? `👤 **${q.userName}** (\`${account}\`)${planText}`
+        : `👤 \`${account}\`${planText}`;
 
     fields.push({
       name: '📊 Antigravity Gemini 토큰 & 쿼터 현황',
       value:
-        `${userText}\n` +
+        (userText ? `${userText}\n` : '') +
         `• 🔋 **Gemini 잔여 쿼터 (Pro / Flash 공용)**: ${quotaBar} 잔여\n` +
         `• ⏳ **쿼터 리셋 예정**: ${resetCountdown}`,
       inline: false,
@@ -680,7 +685,7 @@ export async function handleModelSlashCommand(
   }
 
   const status = await getModelStatus(actionMessage);
-  const payload = buildModelConsolePayload(status, requesterName);
+  const payload = buildModelConsolePayload(status, requesterName, isAuthorizedUser(interactionUserId(interaction)));
 
   await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
     method: 'POST',
@@ -796,7 +801,7 @@ export async function handleModelButtonInteraction(
     // 3. Update the original message with new status (force refresh quota on status check)
     const isStatusCheck = customId === 'model:status';
     const updatedStatus = await getModelStatus(actionMessage, isStatusCheck);
-    const payload = buildModelConsolePayload(updatedStatus, userName);
+    const payload = buildModelConsolePayload(updatedStatus, userName, true);
 
     await fetch(`https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`, {
       method: 'PATCH',
@@ -816,9 +821,10 @@ export async function handleModelTextMessage(
   botToken: string,
   requesterName?: string,
   actionMessage?: string,
+  showAccount = false,
 ): Promise<void> {
   const status = await getModelStatus(actionMessage);
-  const payload = buildModelConsolePayload(status, requesterName);
+  const payload = buildModelConsolePayload(status, requesterName, showAccount);
 
   await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: 'POST',
