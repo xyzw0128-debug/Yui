@@ -31,10 +31,54 @@ import {
   handleModelSlashCommand,
   handleModelButtonInteraction,
   handleModelTextMessage,
+  switchProxyModel,
+  isAuthorizedUser,
+  interactionUserId,
+  UNAUTHORIZED_MODEL_MESSAGE,
   recordActiveDiscordChannel,
   startModelFailoverWatchdog,
   stopModelFailoverWatchdog,
 } from './discord-model-console.js';
+import {
+  initStudyRag,
+  stopStudyRag,
+  setStudyRagEnabled,
+  isStudyRagEnabled,
+  isStudyRagActive,
+  getStudyRagStats,
+} from '../modules/study-rag/index.js';
+
+/**
+ * Build the response message for a /study or !study command.
+ * Shared between the slash command handler and the plain text fallback.
+ */
+function buildStudyRagResponse(action: string, authorized: boolean): string {
+  const isToggle = action === 'on' || action === '켜기' || action === 'off' || action === '끄기';
+  if (isToggle && !authorized) {
+    return '⚠️ 관리자(파파)만 학습 RAG를 켜거나 끌 수 있습니다.';
+  }
+  if (action === 'on' || action === '켜기') {
+    setStudyRagEnabled(true);
+    return '📚 **학습 RAG 활성화됨**\n강의자료 기반 자동 검색이 켜졌습니다.';
+  }
+  if (action === 'off' || action === '끄기') {
+    setStudyRagEnabled(false);
+    return '📕 **학습 RAG 비활성화됨**\n강의자료 기반 자동 검색이 꺼졌습니다.';
+  }
+  // status
+  const active = isStudyRagActive();
+  const enabled = isStudyRagEnabled();
+  const stats = active ? getStudyRagStats() : null;
+  if (!active) {
+    return '📕 **학습 RAG 상태**: 초기화되지 않음 (시작 시 인덱싱 실패 또는 경로 미설정)';
+  }
+  const statusEmoji = enabled ? '🟢' : '🔴';
+  const statusText = enabled ? '활성' : '비활성';
+  const statsLine = stats
+    ? `\n📊 과목: ${stats.courses.length}개 | 파일: ${stats.files}개 | 청크: ${stats.totalChunks}개`
+    : '';
+  return `📚 **학습 RAG 상태**: ${statusEmoji} ${statusText}${statsLine}\n\n사용법: \`/study on\` 또는 \`/study off\` (슬래시 또는 일반 텍스트 모두 가능)`;
+}
 
 /** Adapter with optional gateway support (e.g., Discord). */
 interface GatewayAdapter extends Adapter {
@@ -767,6 +811,9 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         // Start 429 smart failover watchdog
         startModelFailoverWatchdog(config.botToken);
 
+        // Initialize Study RAG auto-indexing in background
+        void initStudyRag();
+
         // Exponential backoff capped at 1h. Without this, an unrecoverable
         // failure (e.g., TokenInvalid) restarts ~10×/sec and Discord's
         // Cloudflare layer issues a multi-hour IP block. A run that lasts
@@ -1030,6 +1077,7 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
 
     async teardown() {
       stopModelFailoverWatchdog();
+      stopStudyRag();
       gatewayAbort?.abort();
       await chat.shutdown();
       log.info('Chat SDK bridge shut down', { adapter: adapter.name });
@@ -1131,7 +1179,7 @@ export async function handleForwardedEvent(
     // type 2 = Slash Command (Application Command)
     if (interaction.type === 2) {
       const data = interaction.data as Record<string, unknown>;
-      if (data?.name === 'model') {
+      if (data?.name === 'model' || data?.name === 'boost') {
         const user =
           ((interaction.member as Record<string, unknown>)?.user as Record<string, string> | undefined) ??
           (interaction.user as Record<string, string> | undefined);
@@ -1139,7 +1187,35 @@ export async function handleForwardedEvent(
         try {
           await handleModelSlashCommand(interaction, requesterName);
         } catch (err) {
-          log.error('Failed to handle /model slash command', { err });
+          log.error('Failed to handle /model or /boost slash command', { err });
+        }
+        return;
+      }
+
+      // /study — toggle Study RAG on/off
+      if (data?.name === 'study') {
+        const interactionId = interaction.id as string;
+        const interactionToken = interaction.token as string;
+        const options = (data.options as Array<Record<string, unknown>>) || [];
+        const actionOpt = options.find((o) => o.name === 'action');
+        const action = (actionOpt?.value as string) || 'status';
+
+        const responseContent = buildStudyRagResponse(action, isAuthorizedUser(interactionUserId(interaction)));
+
+        try {
+          await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 4, // CHANNEL_MESSAGE_WITH_SOURCE
+              data: {
+                content: responseContent,
+                flags: 64, // EPHEMERAL — only visible to the command user
+              },
+            }),
+          });
+        } catch (err) {
+          log.error('Failed to handle /study slash command', { err });
         }
         return;
       }
@@ -1233,17 +1309,105 @@ export async function handleForwardedEvent(
       const rawContent = ((messageData.content as string) || '').trim();
       const content = rawContent.toLowerCase();
       const stripped = content.replace(/<@!?[0-9]+>/g, '').trim();
-      if (content === '!model' || content === '!모델' || stripped === '!model' || stripped === '!모델') {
+      const isModelCommand =
+        content === '!model' ||
+        content === '!모델' ||
+        content === '!boost' ||
+        content === '!부스트' ||
+        content === '/model' ||
+        content === '/boost' ||
+        stripped === '!model' ||
+        stripped === '!모델' ||
+        stripped === '!boost' ||
+        stripped === '!부스트' ||
+        stripped === '/model' ||
+        stripped === '/boost';
+
+      const isModelWithArg =
+        stripped.startsWith('!model ') ||
+        stripped.startsWith('!모델 ') ||
+        stripped.startsWith('!boost ') ||
+        stripped.startsWith('!부스트 ') ||
+        stripped.startsWith('/model ') ||
+        stripped.startsWith('/boost ');
+
+      if (isModelCommand || isModelWithArg) {
         const token = botToken || process.env.DISCORD_BOT_TOKEN;
         if (token && messageData.channel_id) {
           const authorRecord = author as Record<string, string> | undefined;
           const requesterName = authorRecord?.global_name || authorRecord?.username;
           try {
-            await handleModelTextMessage(messageData.channel_id as string, token, requesterName);
+            const arg = isModelWithArg ? stripped.split(/\s+/)[1]?.toLowerCase() : undefined;
+            const switchesModel =
+              arg === 'pro' ||
+              arg === 'boost' ||
+              arg === 'agent' ||
+              arg === 'on' ||
+              arg === 'flash' ||
+              arg === 'fast' ||
+              arg === 'off';
+            if (switchesModel && !isAuthorizedUser(authorRecord?.id)) {
+              await fetch(`https://discord.com/api/v10/channels/${messageData.channel_id}/messages`, {
+                method: 'POST',
+                headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: UNAUTHORIZED_MODEL_MESSAGE }),
+              });
+            } else if (isModelWithArg) {
+              if (arg === 'pro' || arg === 'boost' || arg === 'agent' || arg === 'on') {
+                await switchProxyModel('gemini-pro-agent');
+                await handleModelTextMessage(
+                  messageData.channel_id as string,
+                  token,
+                  requesterName,
+                  '🚀 **gemini-pro-agent**(Pro Agent / Boost 모드)로 전환되었습니다!\n(심층 추론 및 고난도 코딩 작업에 최적화, 1M 컨텍스트)',
+                );
+              } else if (arg === 'flash' || arg === 'fast' || arg === 'off') {
+                await switchProxyModel('gemini-3-flash');
+                await handleModelTextMessage(
+                  messageData.channel_id as string,
+                  token,
+                  requesterName,
+                  '⚡ **gemini-3-flash**(초고속 Flash 모드)로 전환되었습니다!\n(빠른 응답 속도 및 일상 작업에 최적화, 1M 컨텍스트)',
+                );
+              } else {
+                await handleModelTextMessage(messageData.channel_id as string, token, requesterName);
+              }
+            } else {
+              await handleModelTextMessage(messageData.channel_id as string, token, requesterName);
+            }
           } catch (err) {
-            log.error('Failed to handle !model text command', { err });
+            log.error('Failed to handle !model/!boost text command', { err });
           }
           return; // Early return to avoid forwarding to LLM agent
+        }
+      }
+
+      // Plain text study command: !study, !study on, !study off, /study, /study on, /study off
+      if (
+        stripped.startsWith('!study') ||
+        stripped.startsWith('/study') ||
+        stripped.startsWith('!학습') ||
+        stripped.startsWith('/학습')
+      ) {
+        const token = botToken || process.env.DISCORD_BOT_TOKEN;
+        if (token && messageData.channel_id) {
+          const parts = stripped.split(/\s+/);
+          const sub = parts[1]?.toLowerCase() || 'status';
+          const msg = buildStudyRagResponse(sub, isAuthorizedUser(author?.id as string | undefined));
+
+          try {
+            await fetch(`https://discord.com/api/v10/channels/${messageData.channel_id}/messages`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bot ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ content: msg }),
+            });
+          } catch (err) {
+            log.error('Failed to send study text response', { err });
+          }
+          return; // Early return so LLM agent doesn't receive this as a prompt
         }
       }
     }

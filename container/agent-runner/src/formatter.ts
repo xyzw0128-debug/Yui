@@ -242,10 +242,11 @@ function formatSingleChat(msg: MessageInRow): string {
   const linksSuffix = formatLinks(content.links, text);
   const attachmentsSuffix = formatAttachments(content.attachments);
   const appContextSuffix = formatAppContext(content.app_context);
+  const studyContextSuffix = formatStudyContext(content.study_context);
 
   const fromAttr = originAttr(msg);
 
-  return `<message${idAttr}${fromAttr} sender="${escapeXml(sender)}" time="${escapeXml(time)}"${replyAttr}>${replyPrefix}${escapeXml(text)}${linksSuffix}${attachmentsSuffix}${appContextSuffix}</message>`;
+  return `<message${idAttr}${fromAttr} sender="${escapeXml(sender)}" time="${escapeXml(time)}"${replyAttr}>${replyPrefix}${escapeXml(text)}${linksSuffix}${attachmentsSuffix}${appContextSuffix}${studyContextSuffix}</message>`;
 }
 
 /**
@@ -372,6 +373,16 @@ function formatAppContext(appContext: any): string {
     .map((e: any) => `${e.type} ${e.id}`);
   if (items.length === 0) return '';
   return `\n(viewing: ${escapeXml(items.join(', '))})`;
+}
+
+/**
+ * Render study material the host's Study RAG module matched to this message
+ * (content.study_context, a preformatted block). Kept separate from the
+ * user's text so the agent can tell what was typed from what was retrieved.
+ */
+function formatStudyContext(studyContext: unknown): string {
+  if (typeof studyContext !== 'string' || !studyContext.trim()) return '';
+  return `\n<study-context>\n${escapeXml(studyContext)}\n</study-context>`;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

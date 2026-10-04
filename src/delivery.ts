@@ -497,7 +497,7 @@ async function deliverMessage(
     msg.platformId,
     msg.threadId,
     msg.kind,
-    msg.content,
+    toPlatformTargetContent(msg.content, content, session.agent_group_id),
     files,
     deliverInstance,
   );
@@ -512,6 +512,27 @@ async function deliverMessage(
   clearOutbox(session.agent_group_id, session.id, msg.id);
 
   return platformMsgId;
+}
+
+/**
+ * Inbound rows are stored as `<platform message id>:<agent group id>` (the
+ * router's messageIdForAgent keeps them unique per session), and the agent's
+ * add_reaction / edit_message tools resolve a seq back to that stored id. The
+ * platform only knows the bare id, so strip this session's suffix before a
+ * reaction or edit reaches the adapter — otherwise Discord rejects it (400
+ * NUMBER_TYPE_COERCE) and the message fails permanently.
+ */
+export function toPlatformTargetContent(raw: string, content: Record<string, unknown>, agentGroupId: string): string {
+  const suffix = `:${agentGroupId}`;
+  const messageId = content.messageId;
+  if (
+    (content.operation !== 'reaction' && content.operation !== 'edit') ||
+    typeof messageId !== 'string' ||
+    !messageId.endsWith(suffix)
+  ) {
+    return raw;
+  }
+  return JSON.stringify({ ...content, messageId: messageId.slice(0, -suffix.length) });
 }
 
 /**

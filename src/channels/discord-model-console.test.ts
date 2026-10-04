@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   isAuthorizedUser,
   buildModelConsolePayload,
   type ModelStatus,
-  FLASH_FAILOVER_CHAIN,
+  ANTIGRAVITY_MODELS,
   FLASH_PERFORMANCE_MODELS,
   getNextFlashModel,
   clearExhaustedFlashModels,
@@ -13,9 +13,11 @@ import {
   recordActiveDiscordChannel,
   getActiveDiscordChannel,
   handleRateLimitDetected,
+  handleModelSlashCommand,
+  UNAUTHORIZED_MODEL_MESSAGE,
 } from './discord-model-console.js';
 
-describe('discord-model-console', () => {
+describe('discord-model-console (Antigravity Edition)', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -50,11 +52,36 @@ describe('discord-model-console', () => {
     });
   });
 
-  describe('buildModelConsolePayload', () => {
-    it('builds a green payload when 3.5 flash-lite is active and healthy', () => {
+  describe('handleModelSlashCommand authorization', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('refuses a mode switch from a non-admin with an ephemeral notice', async () => {
+      process.env.DISCORD_OWNER_ID = '999888777666555444';
+      const fetchMock = vi.fn().mockResolvedValue(new Response('{}'));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await handleModelSlashCommand({
+        id: 'i1',
+        token: 't1',
+        member: { user: { id: '123456789012345678' } },
+        data: { name: 'model', options: [{ name: 'mode', value: 'flash' }] },
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://discord.com/api/v10/interactions/i1/t1/callback');
+      expect(JSON.parse(init.body)).toEqual({ type: 4, data: { content: UNAUTHORIZED_MODEL_MESSAGE, flags: 64 } });
+    });
+  });
+
+  describe('buildModelConsolePayload (Antigravity Models)', () => {
+    it('builds a purple payload when gemini-pro-agent (Boost) is active and healthy', () => {
       const status: ModelStatus = {
-        activeModel: 'gemini-3.5-flash-lite',
-        keyCount: 14,
+        activeModel: 'gemini-pro-agent',
+        oauthAccount: 'xyzw0128@gmail.com',
+        keyCount: 1,
         dockerStatus: 'running',
         httpOk: true,
         pingMs: 45,
@@ -63,75 +90,54 @@ describe('discord-model-console', () => {
       const payload = buildModelConsolePayload(status, 'Lael');
       expect(payload.embeds).toHaveLength(1);
       const embed = payload.embeds[0];
-      expect(embed.color).toBe(0x2ecc71); // Green
-      expect(embed.title).toContain('AI 모델 제어 콘솔');
+      expect(embed.color).toBe(0x9b59b6); // Purple for Pro/Boost
+      expect(embed.title).toContain('AI 모델 제어 콘솔 (Antigravity Mode)');
 
-      expect(payload.components).toHaveLength(3); // 3 ActionRows
+      expect(payload.components).toHaveLength(2); // 2 ActionRows
 
-      // Row 1: 3.1 & 3.5 Flash-Lite
+      // Row 1: Antigravity Models (Pro Agent & Flash)
       const row1Buttons = (payload.components[0] as { components: Array<Record<string, unknown>> }).components;
       expect(row1Buttons).toHaveLength(2);
-      expect(row1Buttons[0].custom_id).toBe('model:3.1-flash-lite');
-      expect(row1Buttons[0].style).toBe(2);
-      expect(row1Buttons[1].custom_id).toBe('model:3.5-flash-lite');
+      expect(row1Buttons[0].custom_id).toBe('model:gemini-pro-agent');
+      expect(row1Buttons[0].style).toBe(3); // Active (Success Green)
+      expect(row1Buttons[0].label).toContain('[활성]');
+
+      expect(row1Buttons[1].custom_id).toBe('model:gemini-3-flash');
+      expect(row1Buttons[1].style).toBe(2); // Inactive (Secondary Grey)
+
+      // Row 2: Utility (status, restart, close)
+      const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
+      expect(row2Buttons).toHaveLength(3);
+      expect(row2Buttons[0].custom_id).toBe('model:status');
+      expect(row2Buttons[1].custom_id).toBe('model:restart');
+      expect(row2Buttons[1].style).toBe(4); // Danger
+      expect(row2Buttons[2].custom_id).toBe('model:close');
+    });
+
+    it('builds a blue payload when gemini-3-flash is active', () => {
+      const status: ModelStatus = {
+        activeModel: 'gemini-3-flash',
+        oauthAccount: 'xyzw0128@gmail.com',
+        keyCount: 1,
+        dockerStatus: 'running',
+        httpOk: true,
+        pingMs: 30,
+      };
+
+      const payload = buildModelConsolePayload(status);
+      expect(payload.embeds[0].color).toBe(0x3498db); // Blue for Flash
+
+      const row1Buttons = (payload.components[0] as { components: Array<Record<string, unknown>> }).components;
       expect(row1Buttons[1].style).toBe(3); // Active
       expect(row1Buttons[1].label).toContain('[활성]');
-
-      // Row 2: 3.5, 3.6, 3.7, 3.8 Flash
-      const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
-      expect(row2Buttons).toHaveLength(4);
-      expect(row2Buttons[0].custom_id).toBe('model:3.5-flash');
-      expect(row2Buttons[1].custom_id).toBe('model:3.6-flash');
-      expect(row2Buttons[2].custom_id).toBe('model:3.7-flash');
-      expect(row2Buttons[3].custom_id).toBe('model:3.8-flash');
-
-      // Row 3: Utility (status, restart, close)
-      const row3Buttons = (payload.components[2] as { components: Array<Record<string, unknown>> }).components;
-      expect(row3Buttons).toHaveLength(3);
-      expect(row3Buttons[0].custom_id).toBe('model:status');
-      expect(row3Buttons[1].custom_id).toBe('model:restart');
-      expect(row3Buttons[1].style).toBe(4); // Danger
-      expect(row3Buttons[2].custom_id).toBe('model:close');
-    });
-
-    it('builds a purple payload when 3.7 flash is active', () => {
-      const status: ModelStatus = {
-        activeModel: 'gemini-3.7-flash',
-        keyCount: 14,
-        dockerStatus: 'running',
-        httpOk: true,
-        pingMs: 50,
-      };
-
-      const payload = buildModelConsolePayload(status);
-      expect(payload.embeds[0].color).toBe(0x9b59b6); // Purple for thinking
-
-      const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
-      expect(row2Buttons[2].style).toBe(3); // Active
-      expect(row2Buttons[2].label).toContain('[활성]');
-    });
-
-    it('builds a purple payload when 3.8 flash is active', () => {
-      const status: ModelStatus = {
-        activeModel: 'gemini-3.8-flash',
-        keyCount: 14,
-        dockerStatus: 'running',
-        httpOk: true,
-        pingMs: 50,
-      };
-
-      const payload = buildModelConsolePayload(status);
-      expect(payload.embeds[0].color).toBe(0x9b59b6);
-
-      const row2Buttons = (payload.components[1] as { components: Array<Record<string, unknown>> }).components;
-      expect(row2Buttons[3].style).toBe(3); // Active
-      expect(row2Buttons[3].label).toContain('[활성]');
+      expect(row1Buttons[0].style).toBe(1); // Primary (Blurple)
     });
 
     it('builds a red payload when httpOk is false', () => {
       const status: ModelStatus = {
-        activeModel: 'gemini-3.5-flash-lite',
-        keyCount: 14,
+        activeModel: 'gemini-pro-agent',
+        oauthAccount: 'xyzw0128@gmail.com',
+        keyCount: 1,
         dockerStatus: 'stopped',
         httpOk: false,
         pingMs: -1,
@@ -141,10 +147,11 @@ describe('discord-model-console', () => {
       expect(payload.embeds[0].color).toBe(0xe74c3c); // Red
     });
 
-    it('includes lastActionMessage if present', () => {
+    it('omits redundant fields (guide, action message, duplicate oauth)', () => {
       const status: ModelStatus = {
-        activeModel: 'gemini-3.5-flash-lite',
-        keyCount: 14,
+        activeModel: 'gemini-pro-agent',
+        oauthAccount: 'xyzw0128@gmail.com',
+        keyCount: 1,
         dockerStatus: 'running',
         httpOk: true,
         pingMs: 42,
@@ -153,43 +160,40 @@ describe('discord-model-console', () => {
 
       const payload = buildModelConsolePayload(status);
       const fields = payload.embeds[0].fields as Array<{ name: string; value: string }>;
-      const actionField = fields.find((f) => f.name.includes('작업 결과'));
-      expect(actionField).toBeDefined();
-      expect(actionField?.value).toBe('모델 전환 성공');
+      expect(fields.find((f) => f.name.includes('작업 결과'))).toBeUndefined();
+      expect(fields.find((f) => f.name.includes('모델 가이드'))).toBeUndefined();
+      expect(fields.find((f) => f.name.includes('Antigravity 연동 계정'))).toBeUndefined();
+      expect(fields.find((f) => f.name.includes('활성 백엔드 모델'))).toBeDefined();
+      expect(fields.find((f) => f.name.includes('프록시 상태'))).toBeDefined();
     });
   });
 
-  describe('FLASH_PERFORMANCE_MODELS & getNextFlashModel (Multi-way Flash Rotation)', () => {
+  describe('ANTIGRAVITY_MODELS & getNextFlashModel (Antigravity Failover)', () => {
     beforeEach(() => {
       clearExhaustedFlashModels();
     });
 
-    it('contains only 3.8, 3.7, 3.6, and 3.5 Flash models', () => {
-      expect(FLASH_PERFORMANCE_MODELS).toEqual([
-        'gemini-3.8-flash',
-        'gemini-3.7-flash',
-        'gemini-3.6-flash',
-        'gemini-3.5-flash',
-      ]);
+    it('contains gemini-pro-agent and gemini-3-flash', () => {
+      expect(ANTIGRAVITY_MODELS).toEqual(['gemini-pro-agent', 'gemini-3-flash']);
+      expect(FLASH_PERFORMANCE_MODELS).toEqual(ANTIGRAVITY_MODELS);
     });
 
-    it('cascades from 3.8-flash through 3.7, 3.6, 3.5 then stops', () => {
-      expect(getNextFlashModel('gemini-3.8-flash')).toBe('gemini-3.7-flash');
-      expect(getNextFlashModel('gemini-3.7-flash')).toBe('gemini-3.6-flash');
-      expect(getNextFlashModel('gemini-3.6-flash')).toBe('gemini-3.5-flash');
-      expect(getNextFlashModel('gemini-3.5-flash')).toBeNull();
+    it('cascades from gemini-pro-agent to gemini-3-flash then stops', () => {
+      expect(getNextFlashModel('gemini-pro-agent')).toBe('gemini-3-flash');
+      expect(getNextFlashModel('gemini-3-flash')).toBeNull();
     });
 
-    it('cascades from 3.5-flash to 3.8-flash then 3.7-flash then 3.6-flash then stops', () => {
-      expect(getNextFlashModel('gemini-3.5-flash')).toBe('gemini-3.8-flash');
-      expect(getNextFlashModel('gemini-3.8-flash')).toBe('gemini-3.7-flash');
-      expect(getNextFlashModel('gemini-3.7-flash')).toBe('gemini-3.6-flash');
-      expect(getNextFlashModel('gemini-3.6-flash')).toBeNull();
+    it('cascades from gemini-3-flash to gemini-pro-agent then stops', () => {
+      expect(getNextFlashModel('gemini-3-flash')).toBe('gemini-pro-agent');
+      expect(getNextFlashModel('gemini-pro-agent')).toBeNull();
     });
 
-    it('STRICT: never rotates from Lite models (3.5-flash-lite, 3.1-flash-lite)', () => {
-      expect(getNextFlashModel('gemini-3.5-flash-lite')).toBeNull();
-      expect(getNextFlashModel('gemini-3.1-flash-lite')).toBeNull();
+    it('maps aliases like pro and boost to gemini-pro-agent for failover', () => {
+      expect(getNextFlashModel('boost')).toBe('gemini-3-flash');
+    });
+
+    it('ignores unknown models', () => {
+      expect(getNextFlashModel('unknown-model-xyz')).toBeNull();
     });
   });
 
@@ -247,80 +251,97 @@ describe('discord-model-console', () => {
     });
   });
 
-  describe('handleRateLimitDetected (Safety & Lite Isolation)', () => {
+  describe('handleRateLimitDetected (Antigravity Failover)', () => {
     beforeEach(() => {
       clearExhaustedFlashModels();
     });
 
-    it('rotates from 3.5-flash to other Flash models and stops when all are exhausted', async () => {
-      const res1 = await handleRateLimitDetected('gemini-3.5-flash', true);
+    it('rotates from gemini-pro-agent to gemini-3-flash and stops when exhausted', async () => {
+      const res1 = await handleRateLimitDetected('gemini-pro-agent', true);
       expect(res1.action).toBe('switch');
-      expect(res1.to).toBe('gemini-3.8-flash');
+      expect(res1.to).toBe('gemini-3-flash');
 
-      const res2 = await handleRateLimitDetected('gemini-3.8-flash', true);
-      expect(res2.action).toBe('switch');
-      expect(res2.to).toBe('gemini-3.7-flash');
-
-      const res3 = await handleRateLimitDetected('gemini-3.7-flash', true);
-      expect(res3.action).toBe('switch');
-      expect(res3.to).toBe('gemini-3.6-flash');
-
-      const res4 = await handleRateLimitDetected('gemini-3.6-flash', true);
-      expect(res4.action).toBe('stop');
-      expect(res4.to).toBeNull();
+      const res2 = await handleRateLimitDetected('gemini-3-flash', true);
+      expect(res2.action).toBe('stop');
+      expect(res2.to).toBeNull();
     });
 
-    it('ignores and does not switch if current model is a Lite model (3.5 or 3.1 Lite)', async () => {
-      const result35 = await handleRateLimitDetected('gemini-3.5-flash-lite', true);
-      expect(result35.action).toBe('ignored');
-      expect(result35.from).toBe('gemini-3.5-flash-lite');
+    it('rotates from gemini-3-flash to gemini-pro-agent and stops when exhausted', async () => {
+      const res1 = await handleRateLimitDetected('gemini-3-flash', true);
+      expect(res1.action).toBe('switch');
+      expect(res1.to).toBe('gemini-pro-agent');
 
-      const result31 = await handleRateLimitDetected('gemini-3.1-flash-lite', true);
-      expect(result31.action).toBe('ignored');
-      expect(result31.from).toBe('gemini-3.1-flash-lite');
+      const res2 = await handleRateLimitDetected('gemini-pro-agent', true);
+      expect(res2.action).toBe('stop');
+      expect(res2.to).toBeNull();
     });
   });
 
-  describe('Dynamic Key & Quota Scaling (No Hardcoded 14 Keys)', () => {
-    it('dynamically formats quota for any key count via formatModelQuota', () => {
-      const liteModel = SUPPORTED_MODELS['3.5-flash-lite'];
-      const flashModel = SUPPORTED_MODELS['3.7-flash'];
+  describe('Antigravity OAuth Model Quota', () => {
+    it('formats quota for Antigravity models with 1M context', () => {
+      const proModel = SUPPORTED_MODELS['gemini-pro-agent'];
+      const flashModel = SUPPORTED_MODELS['gemini-3-flash'];
 
-      // 10 keys: 5,000 lite, 200 flash
-      expect(formatModelQuota(liteModel, 10)).toBe('일 ~5,000회 (500회/키, 15 RPM)');
-      expect(formatModelQuota(flashModel, 10)).toBe('일 200회 (20회/키, 5 RPM)');
+      expect(formatModelQuota(proModel)).toBe('Antigravity OAuth 연동 (1M Tokens)');
+      expect(formatModelQuota(flashModel)).toBe('Antigravity OAuth 연동 (1M Tokens)');
+    });
+  });
 
-      // 20 keys: 10,000 lite, 400 flash
-      expect(formatModelQuota(liteModel, 20)).toBe('일 ~10,000회 (500회/키, 15 RPM)');
-      expect(formatModelQuota(flashModel, 20)).toBe('일 400회 (20회/키, 5 RPM)');
-
-      // 1 key: 500 lite, 20 flash
-      expect(formatModelQuota(liteModel, 1)).toBe('일 ~500회 (500회/키, 15 RPM)');
-      expect(formatModelQuota(flashModel, 1)).toBe('일 20회 (20회/키, 5 RPM)');
+  describe('Antigravity Quota Formatting & Console Display', () => {
+    it('formats quota progress bar correctly', async () => {
+      const { formatQuotaBar } = await import('./discord-model-console.js');
+      expect(formatQuotaBar(undefined)).toBe('`정보 대기 중`');
+      expect(formatQuotaBar(1.0)).toBe('🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 **100%**');
+      expect(formatQuotaBar(0.623)).toBe('🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ **62%**');
+      expect(formatQuotaBar(0.35)).toBe('🟨🟨🟨🟨⬜⬜⬜⬜⬜⬜ **35%**');
+      expect(formatQuotaBar(0.1)).toBe('🟥⬜⬜⬜⬜⬜⬜⬜⬜⬜ **10%**');
     });
 
-    it('dynamically renders embed header and values according to keyCount in status', () => {
-      const status20: ModelStatus = {
-        activeModel: 'gemini-3.7-flash',
-        keyCount: 20,
+    it('formats reset countdown string', async () => {
+      const { formatResetCountdown } = await import('./discord-model-console.js');
+      expect(formatResetCountdown(undefined)).toBe('실시간 자동 갱신');
+
+      // Future date (1 hour from now)
+      const future = new Date(Date.now() + 3600000 + 120000).toISOString();
+      const res = formatResetCountdown(future);
+      expect(res).toContain('약 1시간 2분 후');
+      expect(res).toContain('KST');
+
+      // Past date
+      const past = new Date(Date.now() - 5000).toISOString();
+      const resPast = formatResetCountdown(past);
+      expect(resPast).toContain('초기화 완료 / 갱신 중');
+    });
+
+    it('renders Antigravity quota field in buildModelConsolePayload when present', () => {
+      const status: ModelStatus = {
+        activeModel: 'gemini-3-flash',
+        oauthAccount: 'xyzw0128@gmail.com',
+        keyCount: 1,
         dockerStatus: 'running',
         httpOk: true,
         pingMs: 30,
+        quotaInfo: {
+          userName: '장성원',
+          userEmail: 'xyzw0128@gmail.com',
+          planName: 'Pro',
+          proRemainingFraction: 0.62,
+          proResetTime: new Date(Date.now() + 7200000).toISOString(),
+          flashRemainingFraction: 0.62,
+          flashResetTime: new Date(Date.now() + 7200000).toISOString(),
+          fetchedAt: Date.now(),
+        },
       };
 
-      const payload20 = buildModelConsolePayload(status20);
-      const fields = payload20.embeds[0].fields as Array<{ name: string; value: string }>;
-
-      const guideField = fields.find((f) => f.name.includes('선택 가능한 6개 모델 안내'));
-      expect(guideField?.name).toContain('(20개 키 풀 기준)');
-      expect(guideField?.value).toContain('일 ~10,000회'); // 20 * 500
-      expect(guideField?.value).toContain('일 400회'); // 20 * 20
-
-      const keyField = fields.find((f) => f.name.includes('API Key 풀'));
-      expect(keyField?.value).toContain('20개 키 가동');
-
-      const activeField = fields.find((f) => f.name.includes('현재 활성 백엔드 모델'));
-      expect(activeField?.value).toContain('일 400회 (20회/키, 5 RPM)');
+      const payload = buildModelConsolePayload(status);
+      const fields = payload.embeds[0].fields as Array<{ name: string; value: string }>;
+      const quotaField = fields.find((f) => f.name.includes('토큰 & 쿼터 현황'));
+      expect(quotaField).toBeDefined();
+      expect(quotaField?.value).toContain('장성원');
+      expect(quotaField?.value).toContain('Pro 플랜');
+      expect(quotaField?.value).toContain('Gemini 잔여 쿼터 (Pro / Flash 공용)');
+      expect(quotaField?.value).toContain('62%');
+      expect(quotaField?.value).toContain('쿼터 리셋 예정');
     });
   });
 });
