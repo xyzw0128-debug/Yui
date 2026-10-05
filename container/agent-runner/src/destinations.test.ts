@@ -109,3 +109,17 @@ describe('buildSystemPromptAddendum — multi-destination routing guidance', () 
     expect(prompt).not.toContain('your own channel destination(s):');
   });
 });
+
+describe('buildSystemPromptAddendum — proxied model backend', () => {
+  it('names the real backend model when one is given', () => {
+    const prompt = buildSystemPromptAddendum('Casa', { kind: 'chat' }, 'Gemini 3.1 Pro (gemini-pro-agent) via Google Antigravity');
+
+    expect(prompt).toContain('## Your model');
+    expect(prompt).toContain('**Gemini 3.1 Pro (gemini-pro-agent) via Google Antigravity**');
+    expect(prompt.indexOf('## Your model')).toBeLessThan(prompt.indexOf('## Sending messages'));
+  });
+
+  it('omits the section when no backend is given', () => {
+    expect(buildSystemPromptAddendum('Casa')).not.toContain('## Your model');
+  });
+});

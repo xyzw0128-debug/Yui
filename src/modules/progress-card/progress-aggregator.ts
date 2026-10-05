@@ -77,7 +77,9 @@ export class ProgressAggregator {
           if (name === 'Bash' && typeof inp.command === 'string') {
             inputSummary = cleanBashCommand(inp.command);
           } else if (name.includes('add_reaction')) {
-            inputSummary = `:${inp.emoji || 'blue_heart'}:`;
+            // Names render as :shortcode:, an emoji character as itself.
+            const emoji = String(inp.emoji || '💙');
+            inputSummary = /^[\w+-]+$/.test(emoji) ? `:${emoji}:` : emoji;
           } else if (name.includes('ask_user_question')) {
             inputSummary = String(inp.title || inp.question || '선택지 제시');
           } else if (typeof inp.prompt === 'string') {

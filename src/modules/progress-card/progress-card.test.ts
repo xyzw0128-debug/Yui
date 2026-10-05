@@ -92,6 +92,20 @@ describe('ProgressAggregator & renderProgressCard', () => {
     expect(card2).toContain('└ 🔧 **add_reaction** · `:blue_heart:` ←');
   });
 
+  it('renders an emoji-character reaction without shortcode colons', () => {
+    const agg = new ProgressAggregator();
+    agg.ingestJsonlLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'react-2', name: 'mcp__nanoclaw__add_reaction', input: { emoji: '💙' } }],
+        },
+      }),
+    );
+
+    expect(renderProgressCard(agg.snapshot())).toContain('**add_reaction** · `💙`');
+  });
+
   it('renders initial thinking state when no tools have run yet', () => {
     const agg = new ProgressAggregator(Date.now() - 2000);
     const snap = agg.snapshot(agg.snapshot().startedAt + 2000);
