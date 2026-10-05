@@ -18,7 +18,11 @@ import { readEnvFile } from '../env.js';
 import { registerProviderContainerConfig } from './provider-container-registry.js';
 
 registerProviderContainerConfig('claude', () => {
-  const dotenv = readEnvFile(['ANTHROPIC_BASE_URL']);
+  const dotenv = readEnvFile([
+    'ANTHROPIC_BASE_URL',
+    'CLAUDE_TRANSCRIPT_ROTATE_BYTES',
+    'CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS',
+  ]);
   const env: Record<string, string> = {};
   if (dotenv.ANTHROPIC_BASE_URL) {
     env.ANTHROPIC_BASE_URL = dotenv.ANTHROPIC_BASE_URL;
@@ -26,5 +30,7 @@ registerProviderContainerConfig('claude', () => {
     env.NO_PROXY = '172.17.0.1,localhost,127.0.0.1';
     env.no_proxy = '172.17.0.1,localhost,127.0.0.1';
   }
+  env.CLAUDE_TRANSCRIPT_ROTATE_BYTES = dotenv.CLAUDE_TRANSCRIPT_ROTATE_BYTES || String(2 * 1024 * 1024);
+  env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS = dotenv.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS || '2';
   return { env };
 });

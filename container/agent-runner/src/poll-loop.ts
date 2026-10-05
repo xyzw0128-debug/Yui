@@ -861,6 +861,175 @@ export interface MidTurnScanResult {
   tail: string;
 }
 
+/**
+ * Replace the contents of markdown code spans (both inline code and fenced code blocks)
+ * with spaces of equal length, preserving character offsets and newlines.
+ * This prevents tags inside code snippets (e.g. `<message to="...">` or `</message>`)
+ * from being misidentified as envelope delimiters.
+ */
+export interface MaskCodeSpansResult {
+  masked: string;
+  unclosedStart: number;
+}
+
+export function maskCodeSpans(input: string): MaskCodeSpansResult {
+  const chars = input.split('');
+  const len = chars.length;
+  let i = 0;
+  let unclosedStart = -1;
+
+  while (i < len) {
+    if (chars[i] === '`' || (chars[i] === '~' && i + 2 < len && chars[i + 1] === '~' && chars[i + 2] === '~')) {
+      const delim = chars[i];
+      const start = i;
+      while (i < len && chars[i] === delim) {
+        i++;
+      }
+      const delimLen = i - start;
+      if (delim === '~' && delimLen < 3) {
+        continue;
+      }
+
+      // Search for matching closing delimiter of identical length. Inline
+      // spans (fewer than 3 backticks) close on the same line or not at all:
+      // a stray backtick in prose must not pair with one inside a later
+      // <message> body and mask the envelope tag between them.
+      const inline = delim === '`' && delimLen < 3;
+      let closeStart = -1;
+      let j = i;
+      while (j < len) {
+        if (inline && chars[j] === '\n') break;
+        if (chars[j] === delim) {
+          const runStart = j;
+          while (j < len && chars[j] === delim) {
+            j++;
+          }
+          if (j - runStart === delimLen) {
+            closeStart = runStart;
+            break;
+          }
+        } else {
+          j++;
+        }
+      }
+
+      if (closeStart !== -1) {
+        for (let k = start; k < j; k++) {
+          if (chars[k] !== '\n') {
+            chars[k] = ' ';
+          }
+        }
+        i = j;
+      } else if (inline && j < len) {
+        // Hit a newline first: an unmatched backtick is literal text.
+        continue;
+      } else {
+        // Ran off the end: still streaming (or a truly unclosed fence).
+        if (unclosedStart === -1) {
+          unclosedStart = start;
+        }
+        break;
+      }
+    } else {
+      i++;
+    }
+  }
+
+  return { masked: chars.join(''), unclosedStart };
+}
+
+export interface ParsedMessageBlock {
+  to: string;
+  body: string;
+  startIndex: number;
+  endIndex: number;
+}
+
+/**
+ * Extract complete `<message to="...">...</message>` blocks from text.
+ * Properly handles markdown code spans (both inline backticks and fenced code blocks)
+ * and nested tags so that example tags within responses are not misidentified as
+ * envelope delimiters.
+ */
+export function extractMessageBlocks(text: string): ParsedMessageBlock[] {
+  const noInternal = text.replace(INTERNAL_SPAN_RE, (m) => ' '.repeat(m.length));
+  const { masked } = maskCodeSpans(noInternal);
+
+  const TAG_RE = /<message(?:\s+to="([^"]+)")?\s*>|<\/message>/gi;
+  let match: RegExpExecArray | null;
+  const blocks: ParsedMessageBlock[] = [];
+
+  let currentBlock: {
+    to: string;
+    startIndex: number;
+    innerStart: number;
+    depth: number;
+  } | null = null;
+
+  while ((match = TAG_RE.exec(masked)) !== null) {
+    const fullTag = match[0];
+    const isClose = fullTag.startsWith('</');
+
+    if (!isClose) {
+      const toAttr = match[1];
+      if (currentBlock === null) {
+        if (toAttr) {
+          currentBlock = {
+            to: toAttr,
+            startIndex: match.index,
+            innerStart: match.index + fullTag.length,
+            depth: 1,
+          };
+        }
+      } else if (toAttr) {
+        // Only addressed openings nest; a bare `<message>` in prose is text.
+        currentBlock.depth++;
+      }
+    } else {
+      if (currentBlock !== null) {
+        currentBlock.depth--;
+        if (currentBlock.depth === 0) {
+          const endIndex = match.index + fullTag.length;
+          const rawBody = text.slice(currentBlock.innerStart, match.index);
+          const cleanBody = rawBody.replace(INTERNAL_SPAN_RE, '');
+          const body = stripHarnessTagArtifacts(cleanBody.trim());
+          blocks.push({
+            to: currentBlock.to,
+            body,
+            startIndex: currentBlock.startIndex,
+            endIndex,
+          });
+          currentBlock = null;
+        }
+      }
+    }
+  }
+
+  // Safety net: if the code-span-aware pass found nothing but the plain
+  // envelope regex does, trust the regex — dropping a reply outright is worse
+  // than an occasional early cut at a quoted </message>.
+  if (blocks.length === 0) return extractMessageBlocksLegacy(text, noInternal);
+
+  return blocks;
+}
+
+function extractMessageBlocksLegacy(text: string, noInternal: string): ParsedMessageBlock[] {
+  const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
+  const blocks: ParsedMessageBlock[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = MESSAGE_RE.exec(noInternal)) !== null) {
+    const innerStart = match.index + match[0].length - match[2].length - '</message>'.length;
+    const rawBody = text.slice(innerStart, innerStart + match[2].length);
+    blocks.push({
+      to: match[1],
+      body: stripHarnessTagArtifacts(rawBody.replace(INTERNAL_SPAN_RE, '').trim()),
+      startIndex: match.index,
+      endIndex: MESSAGE_RE.lastIndex,
+    });
+  }
+  return blocks;
+}
+
 export async function deliverMidTurnBlocks(
   text: string,
   routing: RoutingContext,
@@ -881,14 +1050,11 @@ export async function deliverMidTurnBlocks(
   // an explicit double-send and still delivers twice, exactly as the result
   // door always treated it.
   const segStartSeq = turnStartSeq === undefined ? 0 : maxOutboundSeq();
-  const visible = settled.replace(INTERNAL_SPAN_RE, '');
-  const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
-  let match: RegExpExecArray | null;
+  const blocks = extractMessageBlocks(settled);
   let delivered = 0;
-  while ((match = MESSAGE_RE.exec(visible)) !== null) {
-    const toName = match[1];
-    const rawBody = match[2];
-    const body = stripHarnessTagArtifacts(rawBody.trim());
+  for (const block of blocks) {
+    const toName = block.to;
+    const body = block.body;
     const dest = findByName(toName);
     if (!dest) continue;
     // Never deliver a blank message: a body that is empty (or was only
@@ -940,7 +1106,8 @@ const OPEN_MESSAGE_RE = /<message\b/;
  * garbage, not a reason to buffer.
  */
 export function unresolvedTailStart(input: string): number {
-  const masked = input.replace(INTERNAL_SPAN_RE, (m) => ' '.repeat(m.length));
+  const noInternal = input.replace(INTERNAL_SPAN_RE, (m) => ' '.repeat(m.length));
+  const { masked, unclosedStart } = maskCodeSpans(noInternal);
   const candidates: number[] = [];
   const internalOpen = OPEN_INTERNAL_RE.exec(masked);
   if (internalOpen) candidates.push(internalOpen.index);
@@ -948,6 +1115,14 @@ export function unresolvedTailStart(input: string): number {
   const searchFrom = lastClose === -1 ? 0 : lastClose + '</message>'.length;
   const msgOpen = OPEN_MESSAGE_RE.exec(masked.slice(searchFrom));
   if (msgOpen) candidates.push(searchFrom + msgOpen.index);
+
+  if (unclosedStart !== -1) {
+    const closeAfterUnclosed = masked.slice(unclosedStart).indexOf('</message>');
+    if (closeAfterUnclosed === -1) {
+      candidates.push(unclosedStart);
+    }
+  }
+
   if (candidates.length > 0) return Math.min(...candidates);
   const prefixStart = trailingTagPrefixStart(masked);
   return prefixStart === -1 ? input.length : prefixStart;
@@ -1035,32 +1210,21 @@ export async function dispatchResultText(
   // same strip here the guarantee had a final-text hole. Span content still
   // never reaches the user (the closing stripInternalTags pass removed it from
   // the scratchpad already), so nudge/scratchpad semantics are unchanged.
-  text = text.replace(INTERNAL_SPAN_RE, '');
-  const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
-
-  let match: RegExpExecArray | null;
-  // Blocks delivered mid-turn count toward this turn's sent total — a final
-  // text with no (new) blocks after a mid-turn delivery is scratchpad, not an
-  // undelivered reply.
+  const blocks = extractMessageBlocks(text);
   let sent = options?.midTurnSent ?? 0;
-  // <message> blocks present in THIS result text (delivered, stripped, task
-  // or dropped alike) — drives the bare-error-text delivery gate, which must
-  // key on the error result itself, not on earlier mid-turn deliveries.
-  let resultBlocks = 0;
-  // <message to> blocks left inert in a task run — drives the same-turn
-  // "use send_message" nudge in processQuery.
+  let resultBlocks = blocks.length;
   const taskBlocks: TaskMessageBlock[] = [];
   let lastIndex = 0;
   const scratchpadParts: string[] = [];
 
-  while ((match = MESSAGE_RE.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      scratchpadParts.push(text.slice(lastIndex, match.index));
+  for (const block of blocks) {
+    if (block.startIndex > lastIndex) {
+      scratchpadParts.push(text.slice(lastIndex, block.startIndex));
     }
-    const toName = match[1];
-    const body = stripHarnessTagArtifacts(match[2].trim());
-    lastIndex = MESSAGE_RE.lastIndex;
-    resultBlocks++;
+    lastIndex = block.endIndex;
+
+    const toName = block.to;
+    const body = block.body;
 
     // One-door delivery in task sessions: only the send_message tool delivers.
     // A final-text <message to> block here is either an echo of a tool send the
@@ -1176,10 +1340,13 @@ export async function autoAppendTaskLog(text: string): Promise<void> {
   // Run-log hygiene: an inert <message to> block never belongs in the log as
   // raw XML — replace each with its inner text, marked undelivered, so the
   // log stays readable prose.
-  const prose = text.replace(
-    /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g,
-    (_m, to: string, body: string) => `[undelivered → ${to}] ${body.trim()}`,
-  );
+  const blocks = extractMessageBlocks(text);
+  let prose = text;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i];
+    prose =
+      prose.slice(0, block.startIndex) + `[undelivered → ${block.to}] ${block.body}` + prose.slice(block.endIndex);
+  }
   const line = stripInternalTags(prose).replace(/\s+/g, ' ').trim().slice(0, 500);
   if (!line) return;
   await writeMessageOut({

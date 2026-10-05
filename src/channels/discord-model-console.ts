@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
+import https from 'https';
 import { exec, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
+import { envValue } from '../env.js';
 import { log } from '../log.js';
 
 const execAsync = promisify(exec);
@@ -19,8 +21,8 @@ const OWNER_DISCORD_ID = process.env.DISCORD_OWNER_ID || '';
 let isActionInProgress = false;
 
 const SONNET_ALIASES = [
-  'claude-3-5-sonnet-20241022',
   'claude-3-7-sonnet-20250219',
+  'claude-3-5-sonnet-20241022',
   'claude-opus-4-6-thinking',
   'claude-opus-5',
 ];
@@ -30,129 +32,397 @@ export interface ModelOption {
   id: string;
   name: string;
   badge: string;
-  quotaPerKey: number;
-  rpmPerKey: number;
+  description: string;
+  contextWindow?: string;
+  quotaPerKey?: number;
+  rpmPerKey?: number;
 }
 
 export const SUPPORTED_MODELS: Record<string, ModelOption> = {
-  '3.1-flash-lite': {
-    key: '3.1-flash-lite',
-    id: 'gemini-3.1-flash-lite',
-    name: '3.1 Flash-Lite',
-    badge: '⚡ 초경량/초고속',
+  'gemini-pro-agent': {
+    key: 'gemini-pro-agent',
+    id: 'gemini-pro-agent',
+    name: 'Gemini 3.1 Pro',
+    badge: '🚀 최고 성능 / 심층 추론 및 코딩 (Boost)',
+    description: 'Antigravity 플래그십 모델 • 최고 성능, 심층 추론 및 고난도 자율 에이전트 코딩',
+    contextWindow: '1M Tokens',
     quotaPerKey: 500,
     rpmPerKey: 15,
   },
-  '3.5-flash-lite': {
-    key: '3.5-flash-lite',
-    id: 'gemini-3.5-flash-lite',
-    name: '3.5 Flash-Lite',
-    badge: '🛡️ 일상 추천/안전',
-    quotaPerKey: 500,
-    rpmPerKey: 15,
+  'gemini-3-flash': {
+    key: 'gemini-3-flash',
+    id: 'gemini-3-flash',
+    name: 'Gemini 3.8 Flash',
+    badge: '⚡ 초고속 표준 / 일상 대화 및 Q&A (Flash)',
+    description: 'Antigravity 고속 표준 모델 • 실시간 빠른 응답, 일상 대화 및 Q&A 최적화',
+    contextWindow: '1M Tokens',
+    quotaPerKey: 1000,
+    rpmPerKey: 30,
   },
-  '3.5-flash': {
-    key: '3.5-flash',
-    id: 'gemini-3.5-flash',
-    name: '3.5 Flash',
-    badge: '🚀 표준 고성능',
-    quotaPerKey: 20,
-    rpmPerKey: 5,
-  },
-  '3.6-flash': {
-    key: '3.6-flash',
-    id: 'gemini-3.6-flash',
-    name: '3.6 Flash',
-    badge: '🚀 최신 고성능',
-    quotaPerKey: 20,
-    rpmPerKey: 5,
-  },
+  // Backwards compatibility for legacy model keys
   '3.7-flash': {
     key: '3.7-flash',
-    id: 'gemini-3.7-flash',
-    name: '3.7 Flash',
-    badge: '🧠 심층 추론(Thinking)',
+    id: 'gemini-pro-agent',
+    name: '3.7 Flash (Legacy)',
+    badge: '🧠 심층 추론',
+    description: '레거시 키 풀 모델 (gemini-pro-agent로 연결됨)',
     quotaPerKey: 20,
     rpmPerKey: 5,
   },
   '3.8-flash': {
     key: '3.8-flash',
-    id: 'gemini-3.8-flash',
-    name: '3.8 Flash',
-    badge: '⚡ 초고속 심층 코딩/Agentic',
-    quotaPerKey: 20,
-    rpmPerKey: 5,
+    id: 'gemini-3-flash',
+    name: '3.8 Flash (Legacy)',
+    badge: '⚡ 초고속 표준',
+    description: '레거시 키 풀 모델 (gemini-3-flash로 연결됨)',
+    quotaPerKey: 1000,
+    rpmPerKey: 30,
+  },
+  '3.5-flash-lite': {
+    key: '3.5-flash-lite',
+    id: 'gemini-3-flash',
+    name: '3.5 Flash-Lite (Legacy)',
+    badge: '⚡ 초고속',
+    description: '레거시 키 풀 모델 (gemini-3-flash로 연결됨)',
+    quotaPerKey: 1000,
+    rpmPerKey: 30,
   },
 };
 
-export function formatModelQuota(model: ModelOption, keyCount: number): string {
-  const count = Math.max(1, keyCount);
-  const totalRpd = (model.quotaPerKey * count).toLocaleString();
-  const prefix = model.quotaPerKey >= 500 ? '~' : '';
+export const MODEL_ALIASES: Record<string, string> = {
+  // Pro tier (Gemini 3.1 Pro)
+  'gemini-pro-agent': 'gemini-pro-agent',
+  'pro-agent': 'gemini-pro-agent',
+  pro: 'gemini-pro-agent',
+  boost: 'gemini-pro-agent',
+  agent: 'gemini-pro-agent',
+  'gemini-3.1-pro': 'gemini-pro-agent',
+  '3.1-pro': 'gemini-pro-agent',
+
+  // Flash tier (Gemini 3.8 Flash)
+  'gemini-3-flash': 'gemini-3-flash',
+  '3-flash': 'gemini-3-flash',
+  flash: 'gemini-3-flash',
+  'gemini-3.8-flash': 'gemini-3-flash',
+  '3.8-flash': 'gemini-3-flash',
+
+  // Fallback to Flash for any lite alias
+  'gemini-3.5-flash-lite': 'gemini-3-flash',
+  '3.5-flash-lite': 'gemini-3-flash',
+  'flash-lite': 'gemini-3-flash',
+  lite: 'gemini-3-flash',
+  '3.1-flash-lite': 'gemini-3-flash',
+  'gemini-3.1-flash-lite': 'gemini-3-flash',
+
+  // Legacy mappings
+  '3.5-flash': 'gemini-3-flash',
+  '3.6-flash': 'gemini-3-flash',
+  '3.7-flash': 'gemini-pro-agent',
+};
+
+export function formatModelQuota(model: ModelOption, keyCount?: number): string {
+  if (model.id === 'gemini-pro-agent' || model.id === 'gemini-3-flash') {
+    return `Antigravity OAuth 연동 (${model.contextWindow || '1M 컨텍스트'})`;
+  }
+  const count = Math.max(1, keyCount || 1);
+  const totalRpd = ((model.quotaPerKey || 100) * count).toLocaleString();
+  const prefix = (model.quotaPerKey || 0) >= 500 ? '~' : '';
   return `일 ${prefix}${totalRpd}회 (${model.quotaPerKey}회/키, ${model.rpmPerKey} RPM)`;
+}
+
+export interface AntigravityQuotaInfo {
+  userName?: string;
+  userEmail?: string;
+  planName?: string;
+  proRemainingFraction?: number;
+  proResetTime?: string;
+  flashRemainingFraction?: number;
+  flashResetTime?: string;
+  fetchedAt: number;
+}
+
+let cachedQuota: AntigravityQuotaInfo | null = null;
+const QUOTA_CACHE_TTL_MS = 10000; // 10 seconds cache
+
+export function formatQuotaBar(fraction?: number, length = 10): string {
+  if (fraction === undefined || fraction === null || isNaN(fraction)) {
+    return '`정보 대기 중`';
+  }
+  const pct = Math.round(fraction * 100);
+  const filled = Math.max(0, Math.min(length, Math.round(fraction * length)));
+  const empty = length - filled;
+  const icon = pct >= 50 ? '🟩' : pct >= 20 ? '🟨' : '🟥';
+  return `${icon.repeat(filled)}${'⬜'.repeat(empty)} **${pct}%**`;
+}
+
+export function formatResetCountdown(isoTime?: string): string {
+  if (!isoTime) return '실시간 자동 갱신';
+  try {
+    const target = new Date(isoTime);
+    const diffMs = target.getTime() - Date.now();
+    const kstStr = target.toLocaleTimeString('ko-KR', {
+      timeZone: 'Asia/Seoul',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    if (diffMs <= 0) {
+      return `초기화 완료 / 갱신 중 (${kstStr} KST)`;
+    }
+    const hours = Math.floor(diffMs / 3600000);
+    const mins = Math.floor((diffMs % 3600000) / 60000);
+    const timeParts = [];
+    if (hours > 0) timeParts.push(`${hours}시간`);
+    timeParts.push(`${mins}분`);
+    return `약 ${timeParts.join(' ')} 후 (${kstStr} KST)`;
+  } catch {
+    return isoTime;
+  }
+}
+
+export async function fetchAntigravityQuota(forceRefresh = false): Promise<AntigravityQuotaInfo | null> {
+  const now = Date.now();
+  if (!forceRefresh && cachedQuota && now - cachedQuota.fetchedAt < QUOTA_CACHE_TTL_MS) {
+    return cachedQuota;
+  }
+
+  if (process.env.VITEST || process.env.NODE_ENV === 'test') {
+    return cachedQuota;
+  }
+
+  try {
+    const { stdout: pgrepOut } = await execAsync('pgrep -f language_server || true');
+    const pids = pgrepOut.trim().split(/\s+/).filter(Boolean);
+    if (pids.length === 0) return cachedQuota;
+
+    let csrfToken: string | null = null;
+    let targetPid: string | null = null;
+
+    for (const pid of pids) {
+      try {
+        const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+        const m = cmdline.match(/--csrf_token[\x00=]([^\x00\s]+)/);
+        if (m) {
+          csrfToken = m[1];
+          targetPid = pid;
+          break;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!csrfToken || !targetPid) return cachedQuota;
+
+    const { stdout: ssOut } = await execAsync('ss -tulpn || true');
+    const ports: number[] = [];
+    for (const line of ssOut.split('\n')) {
+      if (line.includes(`pid=${targetPid},`)) {
+        const m = line.match(/127\.0\.0\.1:(\d+)/);
+        if (m) ports.push(parseInt(m[1], 10));
+      }
+    }
+
+    if (ports.length === 0) return cachedQuota;
+
+    for (const port of ports) {
+      try {
+        const data = await new Promise<any>((resolve, reject) => {
+          const req = https.request(
+            `https://127.0.0.1:${port}/exa.language_server_pb.LanguageServerService/GetUserStatus`,
+            {
+              method: 'POST',
+              rejectUnauthorized: false,
+              timeout: 2500,
+              headers: {
+                'Content-Type': 'application/json',
+                'x-codeium-csrf-token': csrfToken!,
+              },
+            },
+            (res) => {
+              let body = '';
+              res.on('data', (c) => (body += c));
+              res.on('end', () => {
+                if (res.statusCode === 200) {
+                  try {
+                    resolve(JSON.parse(body));
+                  } catch (e) {
+                    reject(e);
+                  }
+                } else {
+                  reject(new Error(`Status ${res.statusCode}`));
+                }
+              });
+            },
+          );
+          req.on('error', reject);
+          req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Timeout'));
+          });
+          req.write('{}');
+          req.end();
+        });
+
+        const userStatus = data?.userStatus;
+        if (!userStatus) continue;
+
+        const userName = userStatus.name || undefined;
+        const userEmail = userStatus.email || undefined;
+        const planName = userStatus.planStatus?.planInfo?.planName || undefined;
+
+        let proRemainingFraction: number | undefined;
+        let proResetTime: string | undefined;
+        let flashRemainingFraction: number | undefined;
+        let flashResetTime: string | undefined;
+
+        const configs = userStatus.cascadeModelConfigData?.clientModelConfigs || [];
+        for (const c of configs) {
+          const label = c.label || '';
+          const quota = c.quotaInfo;
+          if (label.includes('3.1 Pro')) {
+            if (quota?.remainingFraction !== undefined && proRemainingFraction === undefined) {
+              proRemainingFraction = quota.remainingFraction;
+              proResetTime = quota.resetTime;
+            }
+          } else if (label.includes('3.8 Flash')) {
+            if (quota?.remainingFraction !== undefined && flashRemainingFraction === undefined) {
+              flashRemainingFraction = quota.remainingFraction;
+              flashResetTime = quota.resetTime;
+            }
+          }
+        }
+
+        cachedQuota = {
+          userName,
+          userEmail,
+          planName,
+          proRemainingFraction,
+          proResetTime,
+          flashRemainingFraction,
+          flashResetTime,
+          fetchedAt: now,
+        };
+        return cachedQuota;
+      } catch {
+        // try next port
+      }
+    }
+  } catch (err) {
+    log.warn('Failed to fetch Antigravity quota from language_server', { err });
+  }
+
+  return cachedQuota;
 }
 
 export interface ModelStatus {
   activeModel: string;
+  oauthAccount?: string;
   keyCount: number;
   dockerStatus: string;
   httpOk: boolean;
   pingMs: number;
   lastActionMessage?: string;
+  quotaInfo?: AntigravityQuotaInfo | null;
 }
 
 export function isAuthorizedUser(userId?: string): boolean {
   if (!userId) return false;
-  const ownerId = process.env.DISCORD_OWNER_ID || OWNER_DISCORD_ID;
-  if (userId === ownerId) return true;
-  const adminList = process.env.MODEL_CONSOLE_ADMINS?.split(',').map((s) => s.trim()) || [];
+  const ownerId = process.env.DISCORD_OWNER_ID || OWNER_DISCORD_ID || envValue('DISCORD_OWNER_ID') || '';
+  if (ownerId && userId === ownerId) return true;
+  const adminRaw = process.env.MODEL_CONSOLE_ADMINS || envValue('MODEL_CONSOLE_ADMINS') || '';
+  const adminList = adminRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   return adminList.includes(userId);
 }
 
-export async function probeAllKeys(): Promise<{ healthy: number; total: number; latencyMs: number }> {
-  try {
-    const config = fs.readFileSync(CONFIG_PATH, 'utf8');
-    const keys = [...config.matchAll(/api-key:\s*"([^"]+)"/g)].map((m) => m[1]);
-    if (keys.length === 0) return { healthy: 0, total: 0, latencyMs: -1 };
+export const UNAUTHORIZED_MODEL_MESSAGE = '⚠️ 관리자(파파)만 모델을 변경하거나 프록시를 제어할 수 있습니다.';
 
-    const t0 = Date.now();
-    const results = await Promise.all(
-      keys.map(async (k) => {
-        try {
-          const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${k}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents: [{ parts: [{ text: 'p' }] }] }),
-              signal: AbortSignal.timeout(4000),
-            },
-          );
-          return res.status === 200 ? 1 : 0;
-        } catch {
-          return 0;
+/** Discord user id behind an interaction (guild: member.user, DM: user). */
+export function interactionUserId(interaction: Record<string, unknown>): string | undefined {
+  const user =
+    ((interaction.member as Record<string, unknown>)?.user as Record<string, string> | undefined) ??
+    (interaction.user as Record<string, string> | undefined);
+  return user?.id;
+}
+
+/** Answer an interaction with an ephemeral notice only the invoker sees. */
+export async function replyEphemeral(interaction: Record<string, unknown>, content: string): Promise<void> {
+  await fetch(
+    `https://discord.com/api/v10/interactions/${interaction.id as string}/${interaction.token as string}/callback`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 4, data: { content, flags: 64 } }),
+    },
+  );
+}
+
+export async function probeAntigravity(): Promise<{ healthy: boolean; latencyMs: number; account: string }> {
+  const t0 = Date.now();
+  let account = 'unknown';
+  try {
+    const authDir = path.resolve(path.dirname(CONFIG_PATH), 'auth');
+    if (fs.existsSync(authDir)) {
+      const authFiles = fs.readdirSync(authDir).filter((f) => f.startsWith('antigravity-') && f.endsWith('.json'));
+      if (authFiles.length > 0) {
+        const emailMatch = authFiles[0].match(/antigravity-(.+)\.json/);
+        if (emailMatch) {
+          account = emailMatch[1];
         }
-      }),
-    );
-    const healthy = results.filter((s) => s === 1).length;
-    return { healthy, total: keys.length, latencyMs: Date.now() - t0 };
+      }
+    }
   } catch {
-    return { healthy: 0, total: 0, latencyMs: -1 };
+    // ignore
+  }
+
+  try {
+    const res = await fetch(CLIPROXY_PING_URL, {
+      headers: { Authorization: 'Bearer placeholder' },
+      signal: AbortSignal.timeout(3000),
+    });
+    return { healthy: res.ok, latencyMs: Date.now() - t0, account };
+  } catch {
+    return { healthy: false, latencyMs: -1, account };
   }
 }
 
-export async function getModelStatus(actionMessage?: string): Promise<ModelStatus> {
+export async function probeAllKeys(): Promise<{ healthy: number; total: number; latencyMs: number }> {
+  const probe = await probeAntigravity();
+  return {
+    healthy: probe.healthy ? 1 : 0,
+    total: 1,
+    latencyMs: probe.latencyMs,
+  };
+}
+
+export async function getModelStatus(actionMessage?: string, forceRefresh = false): Promise<ModelStatus> {
   let activeModel = 'unknown';
   let keyCount = 0;
+  let oauthAccount = 'unknown';
 
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const config = fs.readFileSync(CONFIG_PATH, 'utf8');
-      const match = config.match(/- name:\s*"([^"]+)"\s*\n\s*alias:\s*"claude-3-7-sonnet-20250219"/);
+      const match = config.match(/- name:\s*"?([^"\r\n]+)"?\s*\n\s*alias:\s*"?claude-3-7-sonnet-20250219"?/);
       if (match) {
-        activeModel = match[1];
+        activeModel = match[1].trim();
       }
       keyCount = (config.match(/- api-key:/g) || []).length;
+    }
+
+    const authDir = path.resolve(path.dirname(CONFIG_PATH), 'auth');
+    if (fs.existsSync(authDir)) {
+      const authFiles = fs.readdirSync(authDir).filter((f) => f.startsWith('antigravity-') && f.endsWith('.json'));
+      if (authFiles.length > 0) {
+        const emailMatch = authFiles[0].match(/antigravity-(.+)\.json/);
+        if (emailMatch) {
+          oauthAccount = emailMatch[1];
+        }
+      }
     }
   } catch (err) {
     log.error('Failed to read cliproxy config for status', { err });
@@ -181,25 +451,28 @@ export async function getModelStatus(actionMessage?: string): Promise<ModelStatu
     httpOk = false;
   }
 
+  let quotaInfo: AntigravityQuotaInfo | null = null;
+  try {
+    quotaInfo = await fetchAntigravityQuota(forceRefresh);
+  } catch (err) {
+    log.warn('Failed to resolve Antigravity quota in getModelStatus', { err });
+  }
+
   return {
     activeModel,
+    oauthAccount,
     keyCount,
     dockerStatus,
     httpOk,
     pingMs,
     lastActionMessage: actionMessage,
+    quotaInfo,
   };
 }
 
 export async function switchProxyModel(target: string): Promise<string> {
-  let chosenModel = target;
-  if (target === 'flash-lite') {
-    chosenModel = 'gemini-3.5-flash-lite';
-  } else if (target === 'flash') {
-    chosenModel = 'gemini-3.5-flash';
-  } else if (SUPPORTED_MODELS[target]) {
-    chosenModel = SUPPORTED_MODELS[target].id;
-  }
+  const chosenModel =
+    MODEL_ALIASES[target] || (SUPPORTED_MODELS[target] ? SUPPORTED_MODELS[target].id : target) || 'gemini-pro-agent';
 
   // In test environment or if config file does not exist, do not attempt real filesystem writes or docker restart
   if (process.env.VITEST || process.env.NODE_ENV === 'test' || !fs.existsSync(CONFIG_PATH)) {
@@ -211,10 +484,11 @@ export async function switchProxyModel(target: string): Promise<string> {
 
   let matchCount = 0;
   for (const alias of SONNET_ALIASES) {
-    const regex = new RegExp(`- name: "[^"]+"\\s*\\n\\s*alias: "${alias}"`, 'g');
-    const before = text;
-    text = text.replace(regex, `- name: "${chosenModel}"\n        alias: "${alias}"`);
-    if (text !== before) matchCount++;
+    const regex = new RegExp(`(- name:\\s*)"?[^"\\r\\n]+"?(\\s*\\n\\s*alias:\\s*"?${alias}"?)`, 'g');
+    if (regex.test(text)) {
+      matchCount++;
+      text = text.replace(regex, `$1"${chosenModel}"$2`);
+    }
   }
   if (matchCount === 0) {
     log.warn('switchProxyModel: YAML regex matched no aliases — config format may have changed', {
@@ -266,24 +540,24 @@ export async function restartProxyContainer(): Promise<void> {
 export function buildModelConsolePayload(
   status: ModelStatus,
   requesterName?: string,
+  /** Include the OAuth account name/email. Only for owner/admin viewers — the embed is posted publicly. */
+  showAccount = false,
 ): {
   embeds: Array<Record<string, unknown>>;
   components: Array<Record<string, unknown>>;
 } {
-  const isLite = status.activeModel.includes('flash-lite');
-  const isThinking = status.activeModel.includes('3.7') || status.activeModel.includes('3.8');
-  const color = !status.httpOk ? 0xe74c3c : isLite ? 0x2ecc71 : isThinking ? 0x9b59b6 : 0xf39c12;
+  const isPro = status.activeModel === 'gemini-pro-agent';
+  const isFlash = status.activeModel === 'gemini-3-flash';
 
-  const count = Math.max(1, status.keyCount || 1);
-  const liteTotalStr = (500 * count).toLocaleString();
-  const flashTotalStr = (20 * count).toLocaleString();
+  const color = !status.httpOk ? 0xe74c3c : isPro ? 0x9b59b6 : isFlash ? 0x3498db : 0x2ecc71;
 
-  let activeModelBadge = '알 수 없음';
-  for (const model of Object.values(SUPPORTED_MODELS)) {
-    if (status.activeModel === model.id) {
-      activeModelBadge = `${model.badge} • ${formatModelQuota(model, count)}`;
-      break;
-    }
+  let activeModelBadge = 'Antigravity OAuth 연동 모델';
+  if (isPro) {
+    activeModelBadge = '🚀 Pro Agent (최고 성능 / 심층 추론·코딩)';
+  } else if (isFlash) {
+    activeModelBadge = '⚡ Gemini 3 Flash (초고속 / 일상 대화·고효율)';
+  } else {
+    activeModelBadge = `✨ ${status.activeModel} (Antigravity 연동)`;
   }
 
   const fields: Array<Record<string, unknown>> = [
@@ -293,105 +567,67 @@ export function buildModelConsolePayload(
       inline: true,
     },
     {
-      name: '🔑 API Key 풀',
-      value: `${status.keyCount}개 키 가동 (Round-Robin)`,
-      inline: true,
-    },
-    {
       name: '⚙️ 프록시 상태 (CLI Proxy API)',
-      value: `${status.httpOk ? '🟢 정상 가동 중' : '🔴 응답 없음'} (Docker: \`${status.dockerStatus}\`, 레이턴시: \`${status.pingMs >= 0 ? status.pingMs + 'ms' : 'N/A'}\`)`,
-      inline: false,
-    },
-    {
-      name: `📋 선택 가능한 6개 모델 안내 (${count}개 키 풀 기준)`,
-      value:
-        `• \`gemini-3.1-flash-lite\`: ⚡ 초경량 / 초고속 • **일 ~${liteTotalStr}회** (500회/키, 15 RPM)\n` +
-        `• \`gemini-3.5-flash-lite\`: 🛡️ 1M 컨텍스트 / 비전 • **일상 추천 (일 ~${liteTotalStr}회)** ⭐\n` +
-        `• \`gemini-3.5-flash\`: 🚀 표준 고성능 플래시 • 일 ${flashTotalStr}회 (20회/키, 5 RPM)\n` +
-        `• \`gemini-3.6-flash\`: 🚀 차세대 고성능 플래시 • 일 ${flashTotalStr}회 (20회/키, 5 RPM)\n` +
-        `• \`gemini-3.7-flash\`: 🧠 심층 추론(Thinking) • 일 ${flashTotalStr}회 (코딩·논리 특화)\n` +
-        `• \`gemini-3.8-flash\`: ⚡ 초고속 심층 코딩/Agentic • 일 ${flashTotalStr}회 (최신 자율 에이전트)`,
-      inline: false,
+      value: `${status.httpOk ? '🟢 정상 가동 중' : '🔴 응답 없음'}\n(Docker: \`${status.dockerStatus}\`, 지연: \`${status.pingMs >= 0 ? status.pingMs + 'ms' : 'N/A'}\`)`,
+      inline: true,
     },
   ];
 
-  if (status.lastActionMessage) {
+  if (status.quotaInfo) {
+    const q = status.quotaInfo;
+    const quotaFraction = q.proRemainingFraction !== undefined ? q.proRemainingFraction : q.flashRemainingFraction;
+    const quotaBar = formatQuotaBar(quotaFraction);
+    const resetCountdown = formatResetCountdown(q.proResetTime || q.flashResetTime);
+    const planText = q.planName ? ` • **${q.planName} 플랜**` : '';
+    const account = q.userEmail || status.oauthAccount || 'unknown';
+    const userText = !showAccount
+      ? planText.replace(/^ • /, '')
+      : q.userName
+        ? `👤 **${q.userName}** (\`${account}\`)${planText}`
+        : `👤 \`${account}\`${planText}`;
+
     fields.push({
-      name: '🔔 작업 결과',
-      value: status.lastActionMessage,
+      name: '📊 Antigravity Gemini 토큰 & 쿼터 현황',
+      value:
+        (userText ? `${userText}\n` : '') +
+        `• 🔋 **Gemini 잔여 쿼터 (Pro / Flash 공용)**: ${quotaBar} 잔여\n` +
+        `• ⏳ **쿼터 리셋 예정**: ${resetCountdown}`,
       inline: false,
     });
   }
 
   const embed = {
-    title: '🎮 AI 모델 제어 콘솔 (OpenClaw Mode)',
-    description: '원클릭으로 유이의 백엔드 AI 모델을 전환하고 프록시를 제어합니다.',
+    title: '🎮 AI 모델 제어 콘솔 (Antigravity Mode)',
+    description: '원클릭으로 유이의 백엔드 AI 모델을 전환하고 프록시 상태를 제어합니다.',
     color,
     fields,
     footer: {
-      text: `NanoClaw Console • ⏰ 한도 초기화: 매일 16:00 KST (PST 00:00)${requesterName ? ` • 실행자: ${requesterName}` : ''}`,
+      text: `NanoClaw Console • Google Antigravity OAuth 연동${requesterName ? ` • 실행자: ${requesterName}` : ''}`,
     },
     timestamp: new Date().toISOString(),
   };
 
-  // Row 1: Flash-Lite models (7,000 requests/day pool)
-  const is31Lite = status.activeModel === 'gemini-3.1-flash-lite';
-  const is35Lite = status.activeModel === 'gemini-3.5-flash-lite';
+  // Row 1: Model Buttons (Pro Agent vs Flash)
   const row1 = {
     type: 1, // ActionRow
     components: [
       {
         type: 2, // Button
-        style: is31Lite ? 3 : 2, // Success(Green) if active
-        label: is31Lite ? '⚡ 3.1 Flash-Lite [활성]' : '⚡ 3.1 Flash-Lite (초고속)',
-        custom_id: 'model:3.1-flash-lite',
+        style: isPro ? 3 : 1, // Success(Green) if active, else Primary(Blurple)
+        label: isPro ? '🚀 Pro Agent [활성]' : '🚀 Pro Agent (고성능)',
+        custom_id: 'model:gemini-pro-agent',
       },
       {
         type: 2, // Button
-        style: is35Lite ? 3 : 2,
-        label: is35Lite ? '🛡️ 3.5 Flash-Lite [활성]' : '🛡️ 3.5 Flash-Lite (추천⭐)',
-        custom_id: 'model:3.5-flash-lite',
+        style: isFlash ? 3 : 2, // Success(Green) if active, else Secondary(Grey)
+        label: isFlash ? '⚡ Gemini 3 Flash [활성]' : '⚡ Gemini 3 Flash (고속)',
+        custom_id: 'model:gemini-3-flash',
       },
     ],
   };
 
-  // Row 2: Flash models (Performance & Reasoning)
-  const is35Flash = status.activeModel === 'gemini-3.5-flash';
-  const is36Flash = status.activeModel === 'gemini-3.6-flash';
-  const is37Flash = status.activeModel === 'gemini-3.7-flash';
-  const is38Flash = status.activeModel === 'gemini-3.8-flash';
+  // Row 2: Utility buttons
   const row2 = {
-    type: 1, // ActionRow
-    components: [
-      {
-        type: 2,
-        style: is35Flash ? 3 : 2,
-        label: is35Flash ? '🚀 3.5 Flash [활성]' : '🚀 3.5 Flash',
-        custom_id: 'model:3.5-flash',
-      },
-      {
-        type: 2,
-        style: is36Flash ? 3 : 2,
-        label: is36Flash ? '🚀 3.6 Flash [활성]' : '🚀 3.6 Flash',
-        custom_id: 'model:3.6-flash',
-      },
-      {
-        type: 2,
-        style: is37Flash ? 3 : 2,
-        label: is37Flash ? '🧠 3.7 Flash [활성]' : '🧠 3.7 Flash',
-        custom_id: 'model:3.7-flash',
-      },
-      {
-        type: 2,
-        style: is38Flash ? 3 : 2,
-        label: is38Flash ? '⚡ 3.8 Flash [활성]' : '⚡ 3.8 Flash (최신🚀)',
-        custom_id: 'model:3.8-flash',
-      },
-    ],
-  };
-
-  // Row 3: Utility buttons
-  const row3 = {
     type: 1, // ActionRow
     components: [
       {
@@ -415,11 +651,11 @@ export function buildModelConsolePayload(
     ],
   };
 
-  return { embeds: [embed], components: [row1, row2, row3] };
+  return { embeds: [embed], components: [row1, row2] };
 }
 
 /**
- * Handle slash command `/model` (interaction type 2)
+ * Handle slash command `/model` or `/boost` (interaction type 2)
  */
 export async function handleModelSlashCommand(
   interaction: Record<string, unknown>,
@@ -427,8 +663,29 @@ export async function handleModelSlashCommand(
 ): Promise<void> {
   const interactionId = interaction.id as string;
   const interactionToken = interaction.token as string;
-  const status = await getModelStatus();
-  const payload = buildModelConsolePayload(status, requesterName);
+  const data = interaction.data as Record<string, unknown> | undefined;
+
+  let actionMessage: string | undefined;
+  const options = (data?.options as Array<Record<string, unknown>>) || [];
+  const modeOpt = options.find((o) => o.name === 'mode');
+  if (modeOpt?.value) {
+    // Viewing the console is open; switching models rewrites config.yaml and
+    // restarts the proxy, so it is owner/admin-only (same as the buttons).
+    if (!isAuthorizedUser(interactionUserId(interaction))) {
+      await replyEphemeral(interaction, UNAUTHORIZED_MODEL_MESSAGE);
+      return;
+    }
+    const target = String(modeOpt.value);
+    try {
+      const switched = await switchProxyModel(target);
+      actionMessage = `✅ **${switched}** 모델로 성공적으로 전환되었습니다!`;
+    } catch (err) {
+      actionMessage = `❌ 모델 전환 실패: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  const status = await getModelStatus(actionMessage);
+  const payload = buildModelConsolePayload(status, requesterName, isAuthorizedUser(interactionUserId(interaction)));
 
   await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
     method: 'POST',
@@ -458,18 +715,7 @@ export async function handleModelButtonInteraction(
   const userName = user?.global_name || user?.username || '알 수 없음';
 
   if (!isAuthorizedUser(userId)) {
-    // Ephemeral warning for unauthorized users
-    await fetch(`https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: 4,
-        data: {
-          content: '⚠️ 파파(관리자)만 모델을 변경하거나 프록시를 제어할 수 있습니다.',
-          flags: 64, // EPHEMERAL
-        },
-      }),
-    });
+    await replyEphemeral(interaction, UNAUTHORIZED_MODEL_MESSAGE);
     return;
   }
 
@@ -518,35 +764,33 @@ export async function handleModelButtonInteraction(
     let actionMessage = '';
     try {
       clearExhaustedFlashModels();
-      const currentStatus = await getModelStatus();
-      const count = Math.max(1, currentStatus.keyCount || 1);
-      const liteTotalStr = (500 * count).toLocaleString();
-      const flashTotalStr = (20 * count).toLocaleString();
 
-      if (customId === 'model:3.1-flash-lite') {
-        const model = await switchProxyModel('3.1-flash-lite');
-        actionMessage = `⚡ **${model}**(초경량/초고속 모드)로 전환되었습니다!\n(일 ~${liteTotalStr}회 풀, 15 RPM)`;
-      } else if (customId === 'model:flash-lite' || customId === 'model:3.5-flash-lite') {
-        const model = await switchProxyModel('3.5-flash-lite');
-        actionMessage = `🛡️ **${model}**(일상 추천/안전 모드)로 전환되었습니다!\n(일 ~${liteTotalStr}회 풀, 15 RPM)`;
-      } else if (customId === 'model:flash' || customId === 'model:3.5-flash') {
-        const model = await switchProxyModel('3.5-flash');
-        actionMessage = `🚀 **${model}**(표준 고성능 모드)로 전환되었습니다!\n(주의: 일 ${flashTotalStr}회 초과 시 429 가능, 5 RPM)`;
-      } else if (customId === 'model:3.6-flash') {
-        const model = await switchProxyModel('3.6-flash');
-        actionMessage = `🚀 **${model}**(차세대 고성능 모드)로 전환되었습니다!\n(주의: 일 ${flashTotalStr}회 초과 시 429 가능, 5 RPM)`;
-      } else if (customId === 'model:3.7-flash') {
-        const model = await switchProxyModel('3.7-flash');
-        actionMessage = `🧠 **${model}**(심층 추론·Thinking 모드)로 전환되었습니다!\n(일 ${flashTotalStr}회 풀, 코딩·논리 특화, 5 RPM)`;
-      } else if (customId === 'model:3.8-flash') {
-        const model = await switchProxyModel('3.8-flash');
-        actionMessage = `⚡ **${model}**(초고속 심층 코딩/Agentic 모드)로 전환되었습니다!\n(일 ${flashTotalStr}회 풀, 최신 자율 에이전트, 5 RPM)`;
+      if (customId === 'model:gemini-pro-agent' || customId === 'model:pro' || customId === 'model:boost') {
+        const model = await switchProxyModel('gemini-pro-agent');
+        actionMessage = `🚀 **${model}**(Pro Agent / Boost 모드)로 전환되었습니다!\n(심층 추론 및 고난도 코딩 작업에 최적화, 1M 컨텍스트)`;
+      } else if (
+        customId === 'model:gemini-3-flash' ||
+        customId === 'model:flash' ||
+        customId === 'model:3-flash' ||
+        customId === 'model:flash-lite' ||
+        customId === 'model:3.5-flash-lite' ||
+        customId === 'model:3.1-flash-lite' ||
+        customId === 'model:3.5-flash' ||
+        customId === 'model:3.6-flash'
+      ) {
+        const model = await switchProxyModel('gemini-3-flash');
+        actionMessage = `⚡ **${model}**(초고속 Flash 모드)로 전환되었습니다!\n(빠른 응답 속도 및 일상 작업에 최적화, 1M 컨텍스트)`;
+      } else if (customId === 'model:3.7-flash' || customId === 'model:3.8-flash') {
+        const model = await switchProxyModel('gemini-pro-agent');
+        actionMessage = `🚀 **${model}**(Pro Agent / Boost 모드)로 전환되었습니다!\n(심층 추론 및 고난도 코딩 작업에 최적화, 1M 컨텍스트)`;
       } else if (customId === 'model:restart') {
         await restartProxyContainer();
-        actionMessage = '🔄 Cliproxy API 컨테이너를 성공적으로 재시작했습니다.';
+        actionMessage = '🔄 CLI Proxy API 컨테이너를 성공적으로 재시작했습니다.';
       } else if (customId === 'model:status') {
-        const probe = await probeAllKeys();
-        actionMessage = `📊 실시간 키 진단: **${probe.healthy}/${probe.total}개 키 정상 가동** (프로브 속도: ${probe.latencyMs}ms)`;
+        const probe = await probeAntigravity();
+        actionMessage = probe.healthy
+          ? `📊 실시간 Antigravity 상태: **정상 가동 중** (계정: \`${probe.account}\`, 응답 속도: ${probe.latencyMs}ms)`
+          : `⚠️ 프록시 응답 지연 또는 오류 상태`;
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -554,9 +798,10 @@ export async function handleModelButtonInteraction(
       log.error('Model console action failed', { customId, err });
     }
 
-    // 3. Update the original message with new status
-    const updatedStatus = await getModelStatus(actionMessage);
-    const payload = buildModelConsolePayload(updatedStatus, userName);
+    // 3. Update the original message with new status (force refresh quota on status check)
+    const isStatusCheck = customId === 'model:status';
+    const updatedStatus = await getModelStatus(actionMessage, isStatusCheck);
+    const payload = buildModelConsolePayload(updatedStatus, userName, true);
 
     await fetch(`https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`, {
       method: 'PATCH',
@@ -569,15 +814,17 @@ export async function handleModelButtonInteraction(
 }
 
 /**
- * Handle plain text command `!model` or `!모델`
+ * Handle plain text command `!model`, `!boost`, `!모델`, `!부스트`
  */
 export async function handleModelTextMessage(
   channelId: string,
   botToken: string,
   requesterName?: string,
+  actionMessage?: string,
+  showAccount = false,
 ): Promise<void> {
-  const status = await getModelStatus();
-  const payload = buildModelConsolePayload(status, requesterName);
+  const status = await getModelStatus(actionMessage);
+  const payload = buildModelConsolePayload(status, requesterName, showAccount);
 
   await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
     method: 'POST',
@@ -590,34 +837,27 @@ export async function handleModelTextMessage(
 }
 
 /**
- * Smart 429 Failover & Watchdog (Zero-Degradation / No-Lite Policy)
+ * Smart 429 Failover & Watchdog for Antigravity
  *
  * Behavior:
- * - Flash-Lite (3.1 Lite, 3.5 Lite): NO failover action. Claude Code handles 429 natively.
- * - Flash models (3.5, 3.6, 3.7, 3.8): When ANY flash model hits 429, rotates to another
- *   available Flash model in the pool to continue work.
- * - When all 4 Flash models are exhausted: STOP without switching to Lite,
- *   leaving Claude Code to handle natively.
+ * - Antigravity Models: 'gemini-pro-agent' and 'gemini-3-flash'.
+ * - When 'gemini-pro-agent' hits 429, rotates to 'gemini-3-flash' to continue work.
+ * - When 'gemini-3-flash' hits 429, rotates to 'gemini-pro-agent' to continue work.
+ * - When all models in the pool are exhausted: STOP without infinite cycling,
+ *   leaving Claude Code to handle retry natively.
  */
-export const FLASH_PERFORMANCE_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
-];
+export const ANTIGRAVITY_MODELS = ['gemini-pro-agent', 'gemini-3-flash'];
+
+export const FLASH_PERFORMANCE_MODELS = ['gemini-pro-agent', 'gemini-3-flash'];
 
 export const FLASH_FAILOVER_TARGETS: Record<string, string[]> = {
-  'gemini-3.8-flash': ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
-  'gemini-3.7-flash': ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash'],
-  'gemini-3.6-flash': ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'],
-  'gemini-3.5-flash': ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'],
+  'gemini-pro-agent': ['gemini-3-flash'],
+  'gemini-3-flash': ['gemini-pro-agent'],
 };
 
 export const FLASH_FAILOVER_CHAIN: Record<string, string | null> = {
-  'gemini-3.8-flash': 'gemini-3.7-flash',
-  'gemini-3.7-flash': 'gemini-3.8-flash',
-  'gemini-3.6-flash': 'gemini-3.8-flash',
-  'gemini-3.5-flash': 'gemini-3.8-flash',
+  'gemini-pro-agent': 'gemini-3-flash',
+  'gemini-3-flash': null,
 };
 
 const exhaustedFlashModels = new Set<string>();
@@ -631,20 +871,21 @@ export function clearExhaustedFlashModels(): void {
 }
 
 export function getNextFlashModel(currentModel: string): string | null {
-  if (!FLASH_PERFORMANCE_MODELS.includes(currentModel)) {
-    return null; // Not a Flash performance model (e.g. Flash-Lite); no failover
+  const resolved = MODEL_ALIASES[currentModel] || currentModel;
+  if (!ANTIGRAVITY_MODELS.includes(resolved)) {
+    return null;
   }
 
-  exhaustedFlashModels.add(currentModel);
+  exhaustedFlashModels.add(resolved);
 
-  const targets = FLASH_FAILOVER_TARGETS[currentModel] || [];
+  const targets = FLASH_FAILOVER_TARGETS[resolved] || [];
   for (const target of targets) {
     if (!exhaustedFlashModels.has(target)) {
       return target;
     }
   }
 
-  return null; // All 3 Flash models exhausted! Strictly no Lite.
+  return null;
 }
 
 export const GIN_429_REGEX = /429\s*\|.*POST\s+"\/v1\/messages/;
@@ -662,7 +903,10 @@ export function recordActiveDiscordChannel(channelId?: string): void {
 }
 
 export function getActiveDiscordChannel(): string {
-  return activeDiscordChannelId || process.env.DISCORD_ACTIVE_CHANNEL_ID || '';
+  // .env is not loaded into process.env (see src/env.ts), so read it directly;
+  // otherwise failover alerts after a restart have no channel until someone
+  // sends a message.
+  return activeDiscordChannelId || process.env.DISCORD_ACTIVE_CHANNEL_ID || envValue('DISCORD_ACTIVE_CHANNEL_ID') || '';
 }
 
 export function setDiscordBotToken(token?: string): void {
@@ -677,16 +921,17 @@ export function getDiscordBotToken(): string | null {
 
 export async function sendDiscordNotification(embed: Record<string, unknown>): Promise<boolean> {
   const token = getDiscordBotToken();
-  if (!token || !activeDiscordChannelId) {
+  const channelId = getActiveDiscordChannel();
+  if (!token || !channelId) {
     log.warn('Cannot send failover alert: Discord bot token or channel ID missing', {
       hasToken: Boolean(token),
-      channelId: activeDiscordChannelId,
+      channelId,
     });
     return false;
   }
 
   try {
-    const res = await fetch(`https://discord.com/api/v10/channels/${activeDiscordChannelId}/messages`, {
+    const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
       method: 'POST',
       headers: {
         Authorization: `Bot ${token}`,
@@ -726,11 +971,11 @@ export async function handleRateLimitDetected(
       currentModel = status.activeModel;
     }
 
-    // 1. If current model is not a Flash model (e.g. Flash-Lite):
-    // DO NOTHING. Claude Code handles 429 natively.
-    if (!FLASH_PERFORMANCE_MODELS.includes(currentModel)) {
+    const resolvedCurrent = MODEL_ALIASES[currentModel] || currentModel;
+
+    if (!ANTIGRAVITY_MODELS.includes(resolvedCurrent)) {
       log.info(
-        '429 watchdog: Active model is not a Flash performance model (e.g. Lite); leaving Claude Code to handle natively',
+        '429 watchdog: Active model is not an Antigravity failover model; leaving Claude Code to handle natively',
         {
           currentModel,
         },
@@ -738,40 +983,36 @@ export async function handleRateLimitDetected(
       return { action: 'ignored', from: currentModel };
     }
 
-    // 2. Find next available Flash model among {3.7, 3.6, 3.5}
-    const nextModel = getNextFlashModel(currentModel);
+    const nextModel = getNextFlashModel(resolvedCurrent);
 
     if (nextModel) {
-      log.info('429 watchdog: Auto-switching flash model', { from: currentModel, to: nextModel });
+      log.info('429 watchdog: Auto-switching Antigravity model', { from: resolvedCurrent, to: nextModel });
       await switchProxyModel(nextModel);
 
       await sendDiscordNotification({
-        title: '⚡ [스마트 페일오버] Flash 모델 자동 전환 완료',
+        title: '⚡ [스마트 페일오버] Antigravity 모델 자동 전환 완료',
         description:
-          `기존 활성 모델(**${currentModel}**)의 쿼터 소진(429)이 감지되었습니다.\n\n` +
-          `🚀 작업 유지를 위해 다른 고성능 Flash 모델인 **${nextModel}**(으)로 즉시 자동 전환되었습니다.\n` +
+          `기존 활성 모델(**${resolvedCurrent}**)의 쿼터 소진(429)이 감지되었습니다.\n\n` +
+          `🚀 작업 유지를 위해 대체 Antigravity 모델인 **${nextModel}**(으)로 즉시 자동 전환되었습니다.\n` +
           `Claude Code가 내부 재시도 중이므로 작업이 끊김 없이 자동 복구되어 이어집니다.`,
         color: 0x3498db, // Blue
         fields: [
-          { name: '이전 모델', value: `\`${currentModel}\``, inline: true },
+          { name: '이전 모델', value: `\`${resolvedCurrent}\``, inline: true },
           { name: '전환 모델', value: `\`${nextModel}\``, inline: true },
           { name: '안내', value: 'Claude Code 세션이 자동 재시도에 성공하면 작업이 계속 진행됩니다.', inline: false },
         ],
-        footer: { text: 'NanoClaw Watchdog • 고성능 Flash 풀 순환 가동 중' },
+        footer: { text: 'NanoClaw Watchdog • Google Antigravity OAuth 보호 중' },
         timestamp: new Date().toISOString(),
       });
 
-      return { action: 'switch', from: currentModel, to: nextModel };
+      return { action: 'switch', from: resolvedCurrent, to: nextModel };
     } else {
-      // All 4 Flash models (3.8, 3.7, 3.6, 3.5) exhausted!
-      // Do NOT switch to Lite. Do NOT send task stop alerts.
-      // Leave Claude Code 100% alone to follow its native retry and exit behavior.
       log.info(
-        '429 watchdog: All 4 Flash performance models (3.5, 3.6, 3.7, 3.8) exhausted. Leaving Claude Code to handle retries/errors natively without interference.',
+        '429 watchdog: All Antigravity failover models exhausted. Leaving Claude Code to handle retries/errors natively without interference.',
         { currentModel },
       );
 
-      return { action: 'stop', from: currentModel, to: null };
+      return { action: 'stop', from: resolvedCurrent, to: null };
     }
   } catch (err) {
     log.error('429 watchdog failover failed', { err });

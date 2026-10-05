@@ -258,10 +258,10 @@ function decideContinuationRotation(
   input: { size: number; firstLine: string },
   fx: ClaudeHistoryClock,
 ): ClaudeContinuationRotationDecision | null {
-  const maxBytes = Number(process.env.CLAUDE_TRANSCRIPT_ROTATE_BYTES) || 12 * 1024 * 1024;
+  const maxBytes = Number(process.env.CLAUDE_TRANSCRIPT_ROTATE_BYTES) || 2 * 1024 * 1024;
   const rawDays = process.env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS;
-  const days = rawDays === undefined || rawDays.trim() === '' ? 14 : Number(rawDays);
-  const maxAgeMs = !Number.isFinite(days) ? 14 * 86_400_000 : days > 0 ? days * 86_400_000 : Infinity;
+  const days = rawDays === undefined || rawDays.trim() === '' ? 2 : Number(rawDays);
+  const maxAgeMs = !Number.isFinite(days) ? 2 * 86_400_000 : days > 0 ? days * 86_400_000 : Infinity;
   let startMs: number | null = null;
   try {
     const timestamp = JSON.parse(input.firstLine)?.timestamp;

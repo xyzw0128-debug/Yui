@@ -35,6 +35,7 @@ import {
   registerDeliveryBatchPreview,
   registerPostDeliveryHook,
   setDeliveryAdapter,
+  toPlatformTargetContent,
 } from './delivery.js';
 import { createChannelDeliveryAdapter } from './channels/channel-registry.js';
 import { createDestination } from './modules/agent-to-agent/db/agent-destinations.js';
@@ -737,5 +738,29 @@ describe('deliverSessionMessages — post-delivery hooks', () => {
     const delivered = getDeliveredIds(openInboundDb('ag-1', session.id));
     expect(delivered.has('th-1')).toBe(true);
     expect(delivered.has('th-2')).toBe(true);
+  });
+});
+
+describe('toPlatformTargetContent', () => {
+  it('strips the session agent-group suffix from a reaction target', () => {
+    const content = { operation: 'reaction', messageId: '1554686508173361257:ag-1', emoji: 'heart' };
+    const out = JSON.parse(toPlatformTargetContent(JSON.stringify(content), content, 'ag-1'));
+    expect(out).toEqual({ operation: 'reaction', messageId: '1554686508173361257', emoji: 'heart' });
+  });
+
+  it('strips it from an edit target too', () => {
+    const content = { operation: 'edit', messageId: '42:ag-1', text: 'x' };
+    expect(JSON.parse(toPlatformTargetContent(JSON.stringify(content), content, 'ag-1')).messageId).toBe('42');
+  });
+
+  it('leaves bare platform ids, other groups, and plain messages untouched', () => {
+    for (const content of [
+      { operation: 'reaction', messageId: '1554686508173361257', emoji: 'heart' },
+      { operation: 'reaction', messageId: '99:ag-other', emoji: 'heart' },
+      { text: 'hello :ag-1' },
+    ]) {
+      const raw = JSON.stringify(content);
+      expect(toPlatformTargetContent(raw, content, 'ag-1')).toBe(raw);
+    }
   });
 });
