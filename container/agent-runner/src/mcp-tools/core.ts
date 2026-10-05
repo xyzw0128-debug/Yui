@@ -202,7 +202,11 @@ export const addReaction: McpToolDefinition = {
       type: 'object' as const,
       properties: {
         messageId: { type: 'integer', description: 'Message ID (the numeric id shown in messages)' },
-        emoji: { type: 'string', description: 'Emoji name (e.g., thumbs_up, heart, check)' },
+        emoji: {
+          type: 'string',
+          description:
+            'A common emoji name (e.g., thumbs_up, heart, eyes, check, fire), or for any other emoji the emoji character itself (e.g., 💙). Other names such as blue_heart are not translated and fail on Discord.',
+        },
       },
       required: ['messageId', 'emoji'],
     },
