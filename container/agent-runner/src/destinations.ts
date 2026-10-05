@@ -60,16 +60,39 @@ export function findByRouting(
  * per-agent-group and changes when the operator renames an agent, while
  * the shared base is identical across all agents.
  */
-export function buildSystemPromptAddendum(assistantName?: string, mode: SessionMode = { kind: 'chat' }): string {
+export function buildSystemPromptAddendum(
+  assistantName?: string,
+  mode: SessionMode = { kind: 'chat' },
+  modelBackend?: string,
+): string {
   const sections: string[] = [];
 
   if (assistantName) {
     sections.push(['# You are ' + assistantName, '', `Your name is **${assistantName}**. Use it when the channel asks who you are, when introducing yourself, and when signing any message that explicitly calls for a signature.`].join('\n'));
   }
 
+  if (modelBackend) {
+    sections.push(buildModelBackendSection(modelBackend));
+  }
+
   sections.push(buildDestinationsSection(mode));
 
   return sections.join('\n\n');
+}
+
+/**
+ * When the host routes requests through a proxy that maps the requested
+ * claude-* model onto another model, the SDK's own prompt still names the
+ * alias. This section overrides that so the agent reports the real model.
+ */
+function buildModelBackendSection(modelBackend: string): string {
+  return [
+    '## Your model',
+    '',
+    `The model name, model ID and knowledge cutoff stated earlier in this prompt (e.g. "Opus", \`claude-opus-5\`) describe only the alias this install's API proxy accepts — not the model actually answering. Your requests are served by **${modelBackend}**. When anyone asks which model you are or what you run on, answer with that model, never Claude Opus/Sonnet/Haiku. "Claude Code" is only the agent harness you run inside.`,
+    '',
+    'The host can switch the backend model mid-session (for example after a quota error), so this reflects the model when your session started.',
+  ].join('\n');
 }
 
 function buildDestinationsSection(mode: SessionMode): string {

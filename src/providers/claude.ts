@@ -14,6 +14,7 @@
  *   - ANTHROPIC_AUTH_TOKEN=placeholder — so the SDK adds an
  *     Authorization: Bearer header for OneCLI to overwrite
  */
+import { describeProxyBackendModel } from '../channels/discord-model-console.js';
 import { readEnvFile } from '../env.js';
 import { registerProviderContainerConfig } from './provider-container-registry.js';
 
@@ -29,6 +30,10 @@ registerProviderContainerConfig('claude', () => {
     env.ANTHROPIC_AUTH_TOKEN = 'placeholder';
     env.NO_PROXY = '172.17.0.1,localhost,127.0.0.1';
     env.no_proxy = '172.17.0.1,localhost,127.0.0.1';
+    // The proxy maps the claude-* model the SDK requests onto another model;
+    // tell the agent which one so it doesn't introduce itself as the alias.
+    const backend = describeProxyBackendModel();
+    if (backend) env.NANOCLAW_MODEL_BACKEND = backend;
   }
   env.CLAUDE_TRANSCRIPT_ROTATE_BYTES = dotenv.CLAUDE_TRANSCRIPT_ROTATE_BYTES || String(2 * 1024 * 1024);
   env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS = dotenv.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS || '2';

@@ -63,8 +63,8 @@ async function main(): Promise<void> {
   // operator-run migration and never happen in this normal startup path.
   ensureMemoryScaffold();
 
-  // Runtime-generated system-prompt addendum: agent identity (name) plus
-  // the live destinations map. Everything else (capabilities, per-module
+  // Runtime-generated system-prompt addendum: agent identity (name, and the
+  // real backend model when a proxy aliases it) plus the live destinations map. Everything else (capabilities, per-module
   // instructions, per-channel formatting) is loaded by Claude Code from
   // /workspace/agent/CLAUDE.md — one flat file the host composes per spawn
   // with every instruction source inlined, no imports. Memory is supplied
@@ -73,6 +73,7 @@ async function main(): Promise<void> {
   const instructions = buildSystemPromptAddendum(
     config.assistantName || undefined,
     taskId ? { kind: 'task', taskId } : { kind: 'chat' },
+    process.env.NANOCLAW_MODEL_BACKEND || undefined,
   );
 
   // Discover additional directories mounted at /workspace/extra/*

@@ -15,6 +15,7 @@ import {
   handleRateLimitDetected,
   handleModelSlashCommand,
   UNAUTHORIZED_MODEL_MESSAGE,
+  parseActiveProxyModel,
 } from './discord-model-console.js';
 
 describe('discord-model-console (Antigravity Edition)', () => {
@@ -274,6 +275,23 @@ describe('discord-model-console (Antigravity Edition)', () => {
       const res2 = await handleRateLimitDetected('gemini-pro-agent', true);
       expect(res2.action).toBe('stop');
       expect(res2.to).toBeNull();
+    });
+  });
+
+  describe('parseActiveProxyModel', () => {
+    it('returns the upstream model the claude-* alias maps to', () => {
+      const config = [
+        'oauth-model-alias:',
+        '  antigravity:',
+        '    - name: "gemini-pro-agent"',
+        '      alias: claude-3-7-sonnet-20250219',
+        '      force-mapping: true',
+      ].join('\n');
+      expect(parseActiveProxyModel(config)).toBe('gemini-pro-agent');
+    });
+
+    it('returns null when no claude-* alias is mapped', () => {
+      expect(parseActiveProxyModel('host: 0.0.0.0\nport: 8317\n')).toBeNull();
     });
   });
 

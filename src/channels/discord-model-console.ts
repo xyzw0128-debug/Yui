@@ -120,6 +120,31 @@ export const MODEL_ALIASES: Record<string, string> = {
   '3.7-flash': 'gemini-pro-agent',
 };
 
+/** The upstream model the claude-* aliases map to in the proxy config, or null if none is mapped. */
+export function parseActiveProxyModel(config: string): string | null {
+  const match = config.match(/- name:\s*"?([^"\r\n]+)"?\s*\n\s*alias:\s*"?claude-3-7-sonnet-20250219"?/);
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Human-readable name of the model that actually answers behind the claude-*
+ * aliases, e.g. "Gemini 3.1 Pro (gemini-pro-agent) via Google Antigravity".
+ * The container SDK only sees the alias, so this is passed in at spawn time.
+ * Null when the proxy config is absent or maps no claude-* alias.
+ */
+export function describeProxyBackendModel(): string | null {
+  try {
+    if (!fs.existsSync(CONFIG_PATH)) return null;
+    const active = parseActiveProxyModel(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    if (!active) return null;
+    const name = SUPPORTED_MODELS[active]?.name;
+    return `${name ? `${name} (${active})` : active} via Google Antigravity`;
+  } catch (err) {
+    log.warn('Failed to read cliproxy config for backend model', { err });
+    return null;
+  }
+}
+
 export function formatModelQuota(model: ModelOption, keyCount?: number): string {
   if (model.id === 'gemini-pro-agent' || model.id === 'gemini-3-flash') {
     return `Antigravity OAuth 연동 (${model.contextWindow || '1M 컨텍스트'})`;
@@ -407,10 +432,7 @@ export async function getModelStatus(actionMessage?: string, forceRefresh = fals
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const config = fs.readFileSync(CONFIG_PATH, 'utf8');
-      const match = config.match(/- name:\s*"?([^"\r\n]+)"?\s*\n\s*alias:\s*"?claude-3-7-sonnet-20250219"?/);
-      if (match) {
-        activeModel = match[1].trim();
-      }
+      activeModel = parseActiveProxyModel(config) ?? activeModel;
       keyCount = (config.match(/- api-key:/g) || []).length;
     }
 
